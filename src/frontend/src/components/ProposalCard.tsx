@@ -243,7 +243,10 @@ export function ProposalCard({
 
       {/* Summary */}
       {proposal.summary && (
-        <p className="relative z-10 text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+        <p
+          className="relative z-10 text-xs text-muted-foreground line-clamp-2 leading-relaxed break-all"
+          style={{ overflowWrap: "anywhere" }}
+        >
           {proposal.summary}
         </p>
       )}

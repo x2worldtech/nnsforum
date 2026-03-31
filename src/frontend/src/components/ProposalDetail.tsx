@@ -380,10 +380,13 @@ function MobileContent({
     );
 
   return (
-    <ScrollArea className="flex-1 scrollbar-thin">
+    <ScrollArea className="flex-1 scrollbar-thin [&_[data-slot=scroll-area-viewport]]:overflow-x-hidden">
       <div className="px-4 py-6 space-y-6 max-w-full overflow-x-hidden">
         {/* Title */}
-        <h2 className="text-xl font-bold text-foreground leading-snug break-all">
+        <h2
+          className="text-xl font-bold text-foreground leading-snug break-all"
+          style={{ overflowWrap: "anywhere" }}
+        >
           {proposal.title || `Proposal #${proposal.proposal_id}`}
         </h2>
 
@@ -488,9 +491,10 @@ function MobileContent({
             </div>
             <div
               className={cn(
-                "text-sm text-foreground/80 leading-relaxed break-words",
+                "text-sm text-foreground/80 leading-relaxed break-all",
                 !summaryExpanded && "line-clamp-3",
               )}
+              style={{ overflowWrap: "anywhere" }}
             >
               {proposal.summary}
             </div>
