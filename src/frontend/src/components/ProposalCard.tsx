@@ -161,7 +161,7 @@ export function ProposalCard({
   return (
     <div
       data-ocid={`proposal.item.${index}`}
-      className="group relative bg-card border border-border rounded-2xl p-5 hover:border-white/20 hover:bg-white/[0.03] transition-all duration-200 cursor-pointer"
+      className="group relative bg-card border border-border rounded-2xl p-5 hover:border-black/40 dark:hover:border-white/40 transition-all duration-200 cursor-pointer"
     >
       {/* Clickable overlay */}
       <button
