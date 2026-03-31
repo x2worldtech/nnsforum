@@ -126,6 +126,31 @@ export enum UserRole {
     user = "user",
     guest = "guest"
 }
+
+export interface ProposalVoteCounts {
+    upvotes: bigint;
+    downvotes: bigint;
+}
+export interface ForumTopic {
+    id: bigint;
+    title: string;
+    body: string;
+    author: Principal;
+    category: string;
+    proposalId?: bigint;
+    createdAt: bigint;
+    replyCount: bigint;
+    upvotes: bigint;
+}
+export interface ForumReply {
+    id: bigint;
+    topicId: bigint;
+    body: string;
+    author: Principal;
+    parentId?: bigint;
+    createdAt: bigint;
+    upvotes: bigint;
+}
 export interface backendInterface {
     _caffeineStorageBlobIsLive(hash: Uint8Array): Promise<boolean>;
     _caffeineStorageBlobsToDelete(): Promise<Array<Uint8Array>>;
@@ -149,6 +174,18 @@ export interface backendInterface {
     removeFavorite(proposalId: bigint): Promise<void>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
     upvoteComment(commentId: bigint, proposalId: bigint): Promise<void>;
+    getCallerVoteOnProposal(proposalId: bigint): Promise<boolean | null>;
+    getProposalVoteCounts(proposalId: bigint): Promise<ProposalVoteCounts>;
+    removeVoteFromProposal(proposalId: bigint): Promise<void>;
+    voteOnProposal(proposalId: bigint, isUpvote: boolean): Promise<void>;
+    createForumTopic(title: string, body: string, category: string, proposalId: bigint | null): Promise<bigint>;
+    getForumTopics(category: string | null, offset: bigint, limit: bigint): Promise<Array<ForumTopic>>;
+    getForumTopicById(topicId: bigint): Promise<ForumTopic | null>;
+    getForumTopicsCount(category: string | null): Promise<bigint>;
+    createForumReply(topicId: bigint, body: string, parentId: bigint | null): Promise<bigint>;
+    getForumReplies(topicId: bigint): Promise<Array<ForumReply>>;
+    upvoteForumTopic(topicId: bigint): Promise<void>;
+    upvoteForumReply(topicId: bigint, replyId: bigint): Promise<void>;
 }
 import type { Comment as _Comment, ExternalBlob as _ExternalBlob, SocialLinks as _SocialLinks, UserProfile as _UserProfile, UserRole as _UserRole, _CaffeineStorageRefillInformation as __CaffeineStorageRefillInformation, _CaffeineStorageRefillResult as __CaffeineStorageRefillResult } from "./declarations/backend.did.d.ts";
 export class Backend implements backendInterface {
@@ -445,6 +482,168 @@ export class Backend implements backendInterface {
         } else {
             const result = await this.actor.saveCallerUserProfile(await to_candid_UserProfile_n22(this._uploadFile, this._downloadFile, arg0));
             return result;
+        }
+    }
+
+    async getCallerVoteOnProposal(proposalId: bigint): Promise<boolean | null> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getCallerVoteOnProposal(proposalId);
+                return result.length > 0 ? result[0] : null;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getCallerVoteOnProposal(proposalId);
+            return result.length > 0 ? result[0] : null;
+        }
+    }
+    async getProposalVoteCounts(proposalId: bigint): Promise<ProposalVoteCounts> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getProposalVoteCounts(proposalId);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            return await this.actor.getProposalVoteCounts(proposalId);
+        }
+    }
+    async removeVoteFromProposal(proposalId: bigint): Promise<void> {
+        if (this.processError) {
+            try {
+                await this.actor.removeVoteFromProposal(proposalId);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            await this.actor.removeVoteFromProposal(proposalId);
+        }
+    }
+    async voteOnProposal(proposalId: bigint, isUpvote: boolean): Promise<void> {
+        if (this.processError) {
+            try {
+                await this.actor.voteOnProposal(proposalId, isUpvote);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            await this.actor.voteOnProposal(proposalId, isUpvote);
+        }
+    }
+    async createForumTopic(title: string, body: string, category: string, proposalId: bigint | null): Promise<bigint> {
+        const candidProposalId: [] | [bigint] = proposalId !== null ? [proposalId] : [];
+        if (this.processError) {
+            try {
+                return await this.actor.createForumTopic(title, body, category, candidProposalId);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            return await this.actor.createForumTopic(title, body, category, candidProposalId);
+        }
+    }
+    async getForumTopics(category: string | null, offset: bigint, limit: bigint): Promise<Array<ForumTopic>> {
+        const candidCategory: [] | [string] = category !== null ? [category] : [];
+        if (this.processError) {
+            try {
+                const results = await this.actor.getForumTopics(candidCategory, offset, limit);
+                return results.map((t) => ({ ...t, proposalId: t.proposalId.length > 0 ? t.proposalId[0] : undefined }));
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const results = await this.actor.getForumTopics(candidCategory, offset, limit);
+            return results.map((t) => ({ ...t, proposalId: t.proposalId.length > 0 ? t.proposalId[0] : undefined }));
+        }
+    }
+    async getForumTopicById(topicId: bigint): Promise<ForumTopic | null> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getForumTopicById(topicId);
+                if (result.length === 0) return null;
+                const t = result[0];
+                return { ...t, proposalId: t.proposalId.length > 0 ? t.proposalId[0] : undefined };
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getForumTopicById(topicId);
+            if (result.length === 0) return null;
+            const t = result[0];
+            return { ...t, proposalId: t.proposalId.length > 0 ? t.proposalId[0] : undefined };
+        }
+    }
+    async getForumTopicsCount(category: string | null): Promise<bigint> {
+        const candidCategory: [] | [string] = category !== null ? [category] : [];
+        if (this.processError) {
+            try {
+                return await this.actor.getForumTopicsCount(candidCategory);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            return await this.actor.getForumTopicsCount(candidCategory);
+        }
+    }
+    async createForumReply(topicId: bigint, body: string, parentId: bigint | null): Promise<bigint> {
+        const candidParentId: [] | [bigint] = parentId !== null ? [parentId] : [];
+        if (this.processError) {
+            try {
+                return await this.actor.createForumReply(topicId, body, candidParentId);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            return await this.actor.createForumReply(topicId, body, candidParentId);
+        }
+    }
+    async getForumReplies(topicId: bigint): Promise<Array<ForumReply>> {
+        if (this.processError) {
+            try {
+                const results = await this.actor.getForumReplies(topicId);
+                return results.map((r) => ({ ...r, parentId: r.parentId.length > 0 ? r.parentId[0] : undefined }));
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const results = await this.actor.getForumReplies(topicId);
+            return results.map((r) => ({ ...r, parentId: r.parentId.length > 0 ? r.parentId[0] : undefined }));
+        }
+    }
+    async upvoteForumTopic(topicId: bigint): Promise<void> {
+        if (this.processError) {
+            try {
+                await this.actor.upvoteForumTopic(topicId);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            await this.actor.upvoteForumTopic(topicId);
+        }
+    }
+    async upvoteForumReply(topicId: bigint, replyId: bigint): Promise<void> {
+        if (this.processError) {
+            try {
+                await this.actor.upvoteForumReply(topicId, replyId);
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            await this.actor.upvoteForumReply(topicId, replyId);
         }
     }
     async upvoteComment(arg0: bigint, arg1: bigint): Promise<void> {

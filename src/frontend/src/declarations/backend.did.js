@@ -46,6 +46,30 @@ export const Comment = IDL.Record({
   'parentId' : IDL.Opt(IDL.Nat),
   'proposalId' : IDL.Nat64,
 });
+export const ProposalVoteCounts = IDL.Record({
+  'upvotes' : IDL.Nat,
+  'downvotes' : IDL.Nat,
+});
+export const ForumTopic = IDL.Record({
+  'id' : IDL.Nat,
+  'title' : IDL.Text,
+  'body' : IDL.Text,
+  'author' : IDL.Principal,
+  'category' : IDL.Text,
+  'proposalId' : IDL.Opt(IDL.Nat64),
+  'createdAt' : IDL.Int,
+  'replyCount' : IDL.Nat,
+  'upvotes' : IDL.Nat,
+});
+export const ForumReply = IDL.Record({
+  'id' : IDL.Nat,
+  'topicId' : IDL.Nat,
+  'body' : IDL.Text,
+  'author' : IDL.Principal,
+  'parentId' : IDL.Opt(IDL.Nat),
+  'createdAt' : IDL.Int,
+  'upvotes' : IDL.Nat,
+});
 
 export const idlService = IDL.Service({
   '_caffeineStorageBlobIsLive' : IDL.Func(
@@ -82,10 +106,17 @@ export const idlService = IDL.Service({
     ),
   'addFavorite' : IDL.Func([IDL.Nat64], [], []),
   'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
+  'createForumReply' : IDL.Func([IDL.Nat, IDL.Text, IDL.Opt(IDL.Nat)], [IDL.Nat], []),
+  'createForumTopic' : IDL.Func([IDL.Text, IDL.Text, IDL.Text, IDL.Opt(IDL.Nat64)], [IDL.Nat], []),
   'getCallerUserProfile' : IDL.Func([], [IDL.Opt(UserProfile)], ['query']),
   'getCallerUserRole' : IDL.Func([], [UserRole], ['query']),
+  'getCallerVoteOnProposal' : IDL.Func([IDL.Nat64], [IDL.Opt(IDL.Bool)], ['query']),
   'getComments' : IDL.Func([IDL.Nat64], [IDL.Vec(Comment)], ['query']),
   'getFavorites' : IDL.Func([], [IDL.Vec(IDL.Nat64)], ['query']),
+  'getForumReplies' : IDL.Func([IDL.Nat], [IDL.Vec(ForumReply)], ['query']),
+  'getForumTopicById' : IDL.Func([IDL.Nat], [IDL.Opt(ForumTopic)], ['query']),
+  'getForumTopics' : IDL.Func([IDL.Opt(IDL.Text), IDL.Nat, IDL.Nat], [IDL.Vec(ForumTopic)], ['query']),
+  'getForumTopicsCount' : IDL.Func([IDL.Opt(IDL.Text)], [IDL.Nat], ['query']),
   'getPrincipalByUsername' : IDL.Func(
       [IDL.Text],
       [IDL.Opt(IDL.Principal)],
@@ -96,6 +127,7 @@ export const idlService = IDL.Service({
       [IDL.Opt(UserProfile)],
       ['query'],
     ),
+  'getProposalVoteCounts' : IDL.Func([IDL.Nat64], [ProposalVoteCounts], ['query']),
   'getUserProfileByPrincipal' : IDL.Func(
       [IDL.Principal],
       [IDL.Opt(UserProfile)],
@@ -104,8 +136,12 @@ export const idlService = IDL.Service({
   'isCallerAdmin' : IDL.Func([], [IDL.Bool], ['query']),
   'isUsernameAvailable' : IDL.Func([IDL.Text], [IDL.Bool], ['query']),
   'removeFavorite' : IDL.Func([IDL.Nat64], [], []),
+  'removeVoteFromProposal' : IDL.Func([IDL.Nat64], [], []),
   'saveCallerUserProfile' : IDL.Func([UserProfile], [], []),
   'upvoteComment' : IDL.Func([IDL.Nat, IDL.Nat64], [], []),
+  'upvoteForumReply' : IDL.Func([IDL.Nat, IDL.Nat], [], []),
+  'upvoteForumTopic' : IDL.Func([IDL.Nat], [], []),
+  'voteOnProposal' : IDL.Func([IDL.Nat64, IDL.Bool], [], []),
 });
 
 export const idlInitArgs = [];
@@ -149,6 +185,30 @@ export const idlFactory = ({ IDL }) => {
     'parentId' : IDL.Opt(IDL.Nat),
     'proposalId' : IDL.Nat64,
   });
+  const ProposalVoteCounts = IDL.Record({
+    'upvotes' : IDL.Nat,
+    'downvotes' : IDL.Nat,
+  });
+  const ForumTopic = IDL.Record({
+    'id' : IDL.Nat,
+    'title' : IDL.Text,
+    'body' : IDL.Text,
+    'author' : IDL.Principal,
+    'category' : IDL.Text,
+    'proposalId' : IDL.Opt(IDL.Nat64),
+    'createdAt' : IDL.Int,
+    'replyCount' : IDL.Nat,
+    'upvotes' : IDL.Nat,
+  });
+  const ForumReply = IDL.Record({
+    'id' : IDL.Nat,
+    'topicId' : IDL.Nat,
+    'body' : IDL.Text,
+    'author' : IDL.Principal,
+    'parentId' : IDL.Opt(IDL.Nat),
+    'createdAt' : IDL.Int,
+    'upvotes' : IDL.Nat,
+  });
   
   return IDL.Service({
     '_caffeineStorageBlobIsLive' : IDL.Func(
@@ -185,10 +245,17 @@ export const idlFactory = ({ IDL }) => {
       ),
     'addFavorite' : IDL.Func([IDL.Nat64], [], []),
     'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
+    'createForumReply' : IDL.Func([IDL.Nat, IDL.Text, IDL.Opt(IDL.Nat)], [IDL.Nat], []),
+    'createForumTopic' : IDL.Func([IDL.Text, IDL.Text, IDL.Text, IDL.Opt(IDL.Nat64)], [IDL.Nat], []),
     'getCallerUserProfile' : IDL.Func([], [IDL.Opt(UserProfile)], ['query']),
     'getCallerUserRole' : IDL.Func([], [UserRole], ['query']),
+    'getCallerVoteOnProposal' : IDL.Func([IDL.Nat64], [IDL.Opt(IDL.Bool)], ['query']),
     'getComments' : IDL.Func([IDL.Nat64], [IDL.Vec(Comment)], ['query']),
     'getFavorites' : IDL.Func([], [IDL.Vec(IDL.Nat64)], ['query']),
+    'getForumReplies' : IDL.Func([IDL.Nat], [IDL.Vec(ForumReply)], ['query']),
+    'getForumTopicById' : IDL.Func([IDL.Nat], [IDL.Opt(ForumTopic)], ['query']),
+    'getForumTopics' : IDL.Func([IDL.Opt(IDL.Text), IDL.Nat, IDL.Nat], [IDL.Vec(ForumTopic)], ['query']),
+    'getForumTopicsCount' : IDL.Func([IDL.Opt(IDL.Text)], [IDL.Nat], ['query']),
     'getPrincipalByUsername' : IDL.Func(
         [IDL.Text],
         [IDL.Opt(IDL.Principal)],
@@ -199,6 +266,7 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Opt(UserProfile)],
         ['query'],
       ),
+    'getProposalVoteCounts' : IDL.Func([IDL.Nat64], [ProposalVoteCounts], ['query']),
     'getUserProfileByPrincipal' : IDL.Func(
         [IDL.Principal],
         [IDL.Opt(UserProfile)],
@@ -207,8 +275,12 @@ export const idlFactory = ({ IDL }) => {
     'isCallerAdmin' : IDL.Func([], [IDL.Bool], ['query']),
     'isUsernameAvailable' : IDL.Func([IDL.Text], [IDL.Bool], ['query']),
     'removeFavorite' : IDL.Func([IDL.Nat64], [], []),
+    'removeVoteFromProposal' : IDL.Func([IDL.Nat64], [], []),
     'saveCallerUserProfile' : IDL.Func([UserProfile], [], []),
     'upvoteComment' : IDL.Func([IDL.Nat, IDL.Nat64], [], []),
+    'upvoteForumReply' : IDL.Func([IDL.Nat, IDL.Nat], [], []),
+    'upvoteForumTopic' : IDL.Func([IDL.Nat], [], []),
+    'voteOnProposal' : IDL.Func([IDL.Nat64, IDL.Bool], [], []),
   });
 };
 

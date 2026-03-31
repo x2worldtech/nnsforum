@@ -20,6 +20,8 @@ actor {
   let accessControlState = AccessControl.initState();
 
   var nextCommentId = 0;
+  var nextForumTopicId = 0;
+  var nextForumReplyId = 0;
 
   let favorites = Map.empty<Principal, Set.Set<Nat64>>();
   let commentsByProposalId = Map.empty<Nat64, Map.Map<Nat, Comment>>();
@@ -32,6 +34,10 @@ actor {
   // Proposal votes — Map<Principal, Bool> used as a set (value is ignored)
   let proposalUpvotes = Map.empty<Nat64, Map.Map<Principal, Bool>>();
   let proposalDownvotes = Map.empty<Nat64, Map.Map<Principal, Bool>>();
+
+  // Forum state
+  let forumTopics = Map.empty<Nat, ForumTopic>();
+  let forumRepliesByTopicId = Map.empty<Nat, Map.Map<Nat, ForumReply>>();
 
   // Types
   type Comment = {
@@ -56,6 +62,28 @@ actor {
     bio : Text;
     avatar : ?BlobStorage.ExternalBlob;
     socialLinks : SocialLinks;
+  };
+
+  public type ForumTopic = {
+    id : Nat;
+    title : Text;
+    body : Text;
+    author : Principal;
+    category : Text;
+    proposalId : ?Nat64;
+    createdAt : Int;
+    replyCount : Nat;
+    upvotes : Nat;
+  };
+
+  public type ForumReply = {
+    id : Nat;
+    topicId : Nat;
+    body : Text;
+    author : Principal;
+    parentId : ?Nat;
+    createdAt : Int;
+    upvotes : Nat;
   };
 
   module Comment {
@@ -329,5 +357,143 @@ actor {
       case (null) { false };
     };
     if (isUpvoted) { ?true } else if (isDownvoted) { ?false } else { null };
+  };
+
+  // ==================== OPEN FORUM METHODS ====================
+
+  public shared ({ caller }) func createForumTopic(title : Text, body : Text, category : Text, proposalId : ?Nat64) : async Nat {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can create forum topics");
+    };
+    if (title == "") {
+      Runtime.trap("Title cannot be empty");
+    };
+    let topicId = nextForumTopicId;
+    nextForumTopicId += 1;
+
+    let topic : ForumTopic = {
+      id = topicId;
+      title;
+      body;
+      author = caller;
+      category;
+      proposalId;
+      createdAt = Time.now();
+      replyCount = 0;
+      upvotes = 0;
+    };
+
+    forumTopics.add(topicId, topic);
+    topicId;
+  };
+
+  public query func getForumTopics(category : ?Text, offset : Nat, limit : Nat) : async [ForumTopic] {
+    let all = forumTopics.values().toArray();
+    let filtered = switch (category) {
+      case (null) { all };
+      case (?cat) {
+        if (cat == "") { all } else {
+          Array.filter(all, func(t : ForumTopic) : Bool { t.category == cat })
+        }
+      };
+    };
+    // Sort by newest first (descending createdAt)
+    let sorted = filtered.sort(func(a, b) { Int.compare(b.createdAt, a.createdAt) });
+    let len = sorted.size();
+    if (offset >= len) { return [] };
+    let end = Nat.min(offset + limit, len);
+    Array.tabulate<ForumTopic>(end - offset, func(i) { sorted[offset + i] });
+  };
+
+  public query func getForumTopicById(topicId : Nat) : async ?ForumTopic {
+    forumTopics.get(topicId);
+  };
+
+  public query func getForumTopicsCount(category : ?Text) : async Nat {
+    let all = forumTopics.values().toArray();
+    switch (category) {
+      case (null) { all.size() };
+      case (?cat) {
+        if (cat == "") { all.size() } else {
+          Array.filter(all, func(t : ForumTopic) : Bool { t.category == cat }).size()
+        }
+      };
+    };
+  };
+
+  public shared ({ caller }) func createForumReply(topicId : Nat, body : Text, parentId : ?Nat) : async Nat {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can reply to forum topics");
+    };
+    if (body == "") {
+      Runtime.trap("Reply body cannot be empty");
+    };
+    switch (forumTopics.get(topicId)) {
+      case (null) { Runtime.trap("Topic does not exist") };
+      case (?topic) {
+        let replyId = nextForumReplyId;
+        nextForumReplyId += 1;
+
+        let reply : ForumReply = {
+          id = replyId;
+          topicId;
+          body;
+          author = caller;
+          parentId;
+          createdAt = Time.now();
+          upvotes = 0;
+        };
+
+        let topicReplies = switch (forumRepliesByTopicId.get(topicId)) {
+          case (?existing) { existing };
+          case (null) { Map.empty<Nat, ForumReply>() };
+        };
+        topicReplies.add(replyId, reply);
+        forumRepliesByTopicId.add(topicId, topicReplies);
+
+        // Increment replyCount on topic
+        forumTopics.add(topicId, { topic with replyCount = topic.replyCount + 1 });
+        replyId;
+      };
+    };
+  };
+
+  public query func getForumReplies(topicId : Nat) : async [ForumReply] {
+    switch (forumRepliesByTopicId.get(topicId)) {
+      case (null) { [] };
+      case (?replies) {
+        replies.values().toArray().sort(func(a, b) { Nat.compare(a.id, b.id) })
+      };
+    };
+  };
+
+  public shared ({ caller }) func upvoteForumTopic(topicId : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can upvote forum topics");
+    };
+    switch (forumTopics.get(topicId)) {
+      case (null) { Runtime.trap("Topic does not exist") };
+      case (?topic) {
+        forumTopics.add(topicId, { topic with upvotes = topic.upvotes + 1 });
+      };
+    };
+  };
+
+  public shared ({ caller }) func upvoteForumReply(topicId : Nat, replyId : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can upvote forum replies");
+    };
+    switch (forumRepliesByTopicId.get(topicId)) {
+      case (null) { Runtime.trap("Reply does not exist") };
+      case (?replies) {
+        switch (replies.get(replyId)) {
+          case (null) { Runtime.trap("Reply does not exist") };
+          case (?reply) {
+            replies.add(replyId, { reply with upvotes = reply.upvotes + 1 });
+            forumRepliesByTopicId.add(topicId, replies);
+          };
+        };
+      };
+    };
   };
 };

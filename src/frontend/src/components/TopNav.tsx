@@ -5,6 +5,7 @@ import {
   LayoutGrid,
   LogOut,
   Menu,
+  MessageSquare,
   Moon,
   Sun,
   User,
@@ -15,7 +16,7 @@ import { useState } from "react";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import { useTheme } from "../hooks/useTheme";
 
-export type Page = "all" | "favorites" | "profile";
+export type Page = "all" | "favorites" | "profile" | "forum";
 
 interface TopNavProps {
   currentPage: Page;
@@ -86,6 +87,20 @@ export function TopNav({ currentPage, onNavigate }: TopNavProps) {
             >
               <Heart className="w-3.5 h-3.5" />
               Favorites
+            </button>
+            <button
+              type="button"
+              data-ocid="nav.forum.link"
+              onClick={() => onNavigate("forum")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                currentPage === "forum"
+                  ? "text-foreground bg-secondary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
+              )}
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              Open Forum
             </button>
             {isLoggedIn && (
               <button
@@ -235,6 +250,23 @@ export function TopNav({ currentPage, onNavigate }: TopNavProps) {
                 >
                   <Heart className="w-4 h-4" />
                   Favorites
+                </button>
+                <button
+                  type="button"
+                  data-ocid="nav.forum.link"
+                  onClick={() => {
+                    onNavigate("forum");
+                    setMobileOpen(false);
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-colors",
+                    currentPage === "forum"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+                  )}
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  Open Forum
                 </button>
                 {isLoggedIn && (
                   <button

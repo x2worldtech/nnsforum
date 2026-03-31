@@ -13,6 +13,7 @@ import { Loader2, LogIn, RefreshCw, Search } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useMemo, useState } from "react";
 import { NetworkBackground } from "./components/NetworkBackground";
+import { OpenForum } from "./components/OpenForum";
 import { ProfilePage } from "./components/ProfilePage";
 import { ProposalCard } from "./components/ProposalCard";
 import { ProposalDetail } from "./components/ProposalDetail";
@@ -52,7 +53,7 @@ function HeroSection({
   return (
     <section
       className="relative w-full overflow-hidden"
-      style={{ height: "calc(100vh - 64px)" }}
+      style={{ height: "420px" }}
     >
       {/* Animated canvas network background */}
       <NetworkBackground />
@@ -79,7 +80,7 @@ function HeroSection({
             <div>
               <div className="text-[clamp(24px,3.5vw,36px)] font-bold text-white tabular-nums">
                 {proposalCount > 0
-                  ? proposalCount.toLocaleString("de-CH")
+                  ? proposalCount.toLocaleString("en-US")
                   : "—"}
               </div>
               <div className="text-sm text-white/60 mt-0.5">
@@ -207,13 +208,24 @@ function Dashboard() {
     return list;
   }, [allProposals, currentPage, favoriteSet, search]);
 
+  const isProposalsPage = currentPage === "all" || currentPage === "favorites";
+
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background pt-14">
       <TopNav currentPage={currentPage} onNavigate={setCurrentPage} />
 
       {/* Profile page */}
       {currentPage === "profile" && (
         <ProfilePage onBack={() => setCurrentPage("all")} />
+      )}
+
+      {/* Open Forum page */}
+      {currentPage === "forum" && (
+        <OpenForum
+          onSelectProposalId={() => {
+            setCurrentPage("all");
+          }}
+        />
       )}
 
       {/* Hero section — only on All Proposals */}
@@ -237,8 +249,8 @@ function Dashboard() {
         </div>
       )}
 
-      {/* Main proposals content — hidden when on profile page */}
-      {currentPage !== "profile" && (
+      {/* Main proposals content — only on proposals pages */}
+      {isProposalsPage && (
         <main className="max-w-7xl mx-auto px-5 sm:px-8 pb-12">
           {currentPage === "all" && (
             <div className="mb-5 flex items-baseline gap-3 mt-6">
@@ -247,7 +259,7 @@ function Dashboard() {
               </h2>
               {!isLoading && proposalCount > 0 && (
                 <span className="text-sm text-muted-foreground">
-                  {proposalCount.toLocaleString("de-CH")} total
+                  {proposalCount.toLocaleString("en-US")} total
                 </span>
               )}
             </div>

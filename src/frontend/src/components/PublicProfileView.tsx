@@ -80,7 +80,7 @@ function ProfileContent({
         </div>
         <div>
           <p className="text-sm font-medium text-foreground">
-            Dieses Profil ist noch leer
+            This profile is empty
           </p>
           <p className="text-xs text-muted-foreground mt-1 font-mono break-all">
             {principalStr}

@@ -46,6 +46,30 @@ export interface _CaffeineStorageRefillResult {
   'success' : [] | [boolean],
   'topped_up_amount' : [] | [bigint],
 }
+export interface ProposalVoteCounts {
+  'upvotes' : bigint,
+  'downvotes' : bigint,
+}
+export interface ForumTopic {
+  'id' : bigint,
+  'title' : string,
+  'body' : string,
+  'author' : Principal,
+  'category' : string,
+  'proposalId' : [] | [bigint],
+  'createdAt' : bigint,
+  'replyCount' : bigint,
+  'upvotes' : bigint,
+}
+export interface ForumReply {
+  'id' : bigint,
+  'topicId' : bigint,
+  'body' : string,
+  'author' : Principal,
+  'parentId' : [] | [bigint],
+  'createdAt' : bigint,
+  'upvotes' : bigint,
+}
 export interface _SERVICE {
   '_caffeineStorageBlobIsLive' : ActorMethod<[Uint8Array], boolean>,
   '_caffeineStorageBlobsToDelete' : ActorMethod<[], Array<Uint8Array>>,
@@ -68,16 +92,28 @@ export interface _SERVICE {
   'assignCallerUserRole' : ActorMethod<[Principal, UserRole], undefined>,
   'getCallerUserProfile' : ActorMethod<[], [] | [UserProfile]>,
   'getCallerUserRole' : ActorMethod<[], UserRole>,
+  'getCallerVoteOnProposal' : ActorMethod<[bigint], [] | [boolean]>,
   'getComments' : ActorMethod<[bigint], Array<Comment>>,
   'getFavorites' : ActorMethod<[], BigUint64Array>,
+  'getForumReplies' : ActorMethod<[bigint], Array<ForumReply>>,
+  'getForumTopicById' : ActorMethod<[bigint], [] | [ForumTopic]>,
+  'getForumTopics' : ActorMethod<[[] | [string], bigint, bigint], Array<ForumTopic>>,
+  'getForumTopicsCount' : ActorMethod<[[] | [string]], bigint>,
   'getPrincipalByUsername' : ActorMethod<[string], [] | [Principal]>,
   'getProfileByUsername' : ActorMethod<[string], [] | [UserProfile]>,
+  'getProposalVoteCounts' : ActorMethod<[bigint], ProposalVoteCounts>,
   'getUserProfileByPrincipal' : ActorMethod<[Principal], [] | [UserProfile]>,
   'isCallerAdmin' : ActorMethod<[], boolean>,
   'isUsernameAvailable' : ActorMethod<[string], boolean>,
+  'createForumReply' : ActorMethod<[bigint, string, [] | [bigint]], bigint>,
+  'createForumTopic' : ActorMethod<[string, string, string, [] | [bigint]], bigint>,
   'removeFavorite' : ActorMethod<[bigint], undefined>,
+  'removeVoteFromProposal' : ActorMethod<[bigint], undefined>,
   'saveCallerUserProfile' : ActorMethod<[UserProfile], undefined>,
   'upvoteComment' : ActorMethod<[bigint, bigint], undefined>,
+  'upvoteForumReply' : ActorMethod<[bigint, bigint], undefined>,
+  'upvoteForumTopic' : ActorMethod<[bigint], undefined>,
+  'voteOnProposal' : ActorMethod<[bigint, boolean], undefined>,
 }
 export declare const idlService: IDL.ServiceClass;
 export declare const idlInitArgs: IDL.Type[];

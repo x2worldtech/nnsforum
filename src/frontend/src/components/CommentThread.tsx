@@ -1,9 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { Principal as PrincipalClass } from "@icp-sdk/core/principal";
+import { useQueries } from "@tanstack/react-query";
 import { ChevronUp, Loader2, MessageSquare, Reply } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { UserProfile } from "../backend.d";
 import type { Comment } from "../backend.d";
+import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import { useAddComment, useUpvoteComment } from "../hooks/useQueries";
 import { PublicProfileView } from "./PublicProfileView";
@@ -54,12 +58,50 @@ function shortPrincipal(p: { toString(): string }): string {
   return `${s.slice(0, 5)}...${s.slice(-3)}`;
 }
 
+function AuthorAvatar({
+  profile,
+  principalStr,
+  size = 24,
+}: {
+  profile: UserProfile | null | undefined;
+  principalStr: string;
+  size?: number;
+}) {
+  const avatarUrl = profile?.avatar?.getDirectURL() ?? null;
+  const initial = profile?.username
+    ? profile.username[0].toUpperCase()
+    : principalStr[0].toUpperCase();
+
+  return (
+    <div
+      className="rounded-full overflow-hidden bg-primary/20 flex items-center justify-center flex-shrink-0"
+      style={{ width: size, height: size }}
+    >
+      {avatarUrl ? (
+        <img
+          src={avatarUrl}
+          alt={initial}
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <span
+          className="font-bold text-primary"
+          style={{ fontSize: size * 0.42 }}
+        >
+          {initial}
+        </span>
+      )}
+    </div>
+  );
+}
+
 interface CommentNodeProps {
   node: CommentNode;
   proposalId: bigint;
   depth?: number;
   index: number;
   onAuthorClick: (principalStr: string) => void;
+  profileMap: Map<string, UserProfile | null>;
 }
 
 function CommentItem({
@@ -68,12 +110,19 @@ function CommentItem({
   depth = 0,
   index,
   onAuthorClick,
+  profileMap,
 }: CommentNodeProps) {
   const { identity, login } = useInternetIdentity();
   const [showReply, setShowReply] = useState(false);
   const [replyText, setReplyText] = useState("");
   const addComment = useAddComment(proposalId);
   const upvote = useUpvoteComment(proposalId);
+
+  const principalStr = node.comment.author.toString();
+  const profile = profileMap.get(principalStr);
+  const displayName = profile?.username
+    ? profile.username
+    : shortPrincipal(node.comment.author);
 
   const handleReply = async () => {
     if (!replyText.trim()) return;
@@ -96,16 +145,18 @@ function CommentItem({
       <div className="py-3">
         {/* Author row */}
         <div className="flex items-center gap-2 mb-1.5">
-          <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-            <span className="text-[9px] font-bold text-primary">ID</span>
-          </div>
+          <AuthorAvatar
+            profile={profile}
+            principalStr={principalStr}
+            size={24}
+          />
           <button
             type="button"
             data-ocid={`comment.author.button.${index}`}
-            onClick={() => onAuthorClick(node.comment.author.toString())}
+            onClick={() => onAuthorClick(principalStr)}
             className="text-xs font-semibold text-foreground hover:text-primary transition-colors hover:underline cursor-pointer"
           >
-            {shortPrincipal(node.comment.author)}
+            {displayName}
           </button>
           <span className="text-[11px] text-muted-foreground">
             {formatTimestamp(node.comment.createdAt)}
@@ -199,6 +250,7 @@ function CommentItem({
           depth={depth + 1}
           index={i + 1}
           onAuthorClick={onAuthorClick}
+          profileMap={profileMap}
         />
       ))}
     </div>
@@ -217,11 +269,54 @@ export function CommentThread({
   isLoading,
 }: CommentThreadProps) {
   const { identity, login } = useInternetIdentity();
+  const { actor } = useActor();
   const [newText, setNewText] = useState("");
   const [viewingProfile, setViewingProfile] = useState<string | null>(null);
   const addComment = useAddComment(proposalId);
 
   const tree = buildTree(comments);
+
+  // Collect unique author principals
+  const uniqueAuthors = useMemo(() => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const c of comments) {
+      const ps = c.author.toString();
+      if (!seen.has(ps)) {
+        seen.add(ps);
+        result.push(ps);
+      }
+    }
+    return result;
+  }, [comments]);
+
+  // Batch-load profiles for all unique authors
+  const profileResults = useQueries({
+    queries: uniqueAuthors.map((ps) => ({
+      queryKey: ["publicProfile", ps],
+      queryFn: async (): Promise<UserProfile | null> => {
+        if (!actor) return null;
+        try {
+          const principal = PrincipalClass.fromText(ps);
+          return await actor.getUserProfileByPrincipal(principal);
+        } catch {
+          return null;
+        }
+      },
+      enabled: !!actor && !!ps,
+      staleTime: 300_000,
+    })),
+  });
+
+  // Build a map principal -> profile
+  const profileMap = useMemo(() => {
+    const map = new Map<string, UserProfile | null>();
+    uniqueAuthors.forEach((ps, i) => {
+      const data = profileResults[i]?.data;
+      map.set(ps, data ?? null);
+    });
+    return map;
+  }, [uniqueAuthors, profileResults]);
 
   const handleSubmit = async () => {
     if (!newText.trim()) return;
@@ -306,6 +401,7 @@ export function CommentThread({
               proposalId={proposalId}
               index={i + 1}
               onAuthorClick={(principalStr) => setViewingProfile(principalStr)}
+              profileMap={profileMap}
             />
           ))}
         </div>

@@ -2,7 +2,7 @@ import type { Principal } from "@icp-sdk/core/principal";
 import { Principal as PrincipalClass } from "@icp-sdk/core/principal";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UserProfile } from "../backend";
-import type { Comment } from "../backend.d";
+import type { Comment, ForumReply, ForumTopic } from "../backend.d";
 import type { NNSProposalsResponse } from "../types/nns";
 import type { SortOption, StatusFilter } from "../types/nns";
 import { useActor } from "./useActor";
@@ -322,10 +322,7 @@ export function useProposalVoteCounts(proposalId: bigint | null) {
     queryFn: async () => {
       if (!actor || proposalId === null)
         return { upvotes: BigInt(0), downvotes: BigInt(0) };
-      return (actor as any).getProposalVoteCounts(proposalId) as Promise<{
-        upvotes: bigint;
-        downvotes: bigint;
-      }>;
+      return actor.getProposalVoteCounts(proposalId);
     },
     enabled: !!actor && !isFetching && proposalId !== null,
     staleTime: 30_000,
@@ -339,9 +336,7 @@ export function useCallerVote(proposalId: bigint | null) {
     queryKey: ["callerVote", proposalId?.toString()],
     queryFn: async () => {
       if (!actor || proposalId === null) return null;
-      return (actor as any).getCallerVoteOnProposal(proposalId) as Promise<
-        boolean | null
-      >;
+      return actor.getCallerVoteOnProposal(proposalId);
     },
     enabled: !!actor && !isFetching && proposalId !== null && !!identity,
   });
@@ -360,9 +355,9 @@ export function useVoteOnProposal(proposalId: bigint | null) {
     }: { isUpvote: boolean; remove: boolean }) => {
       if (!actor || proposalId === null) throw new Error("Not ready");
       if (remove) {
-        await (actor as any).removeVoteFromProposal(proposalId);
+        await actor.removeVoteFromProposal(proposalId);
       } else {
-        await (actor as any).voteOnProposal(proposalId, isUpvote);
+        await actor.voteOnProposal(proposalId, isUpvote);
       }
     },
     onMutate: async ({
@@ -424,6 +419,164 @@ export function useVoteOnProposal(proposalId: bigint | null) {
       qc.invalidateQueries({ queryKey: votesKey });
       qc.invalidateQueries({ queryKey: callerVoteKey });
     },
+  });
+}
+
+// ─── Forum Hooks ─────────────────────────────────────────────────────────────
+
+export function useForumTopics(category: string | null, offset: number) {
+  const { actor, isFetching } = useActor();
+  return useQuery<ForumTopic[]>({
+    queryKey: ["forumTopics", category, offset],
+    queryFn: async () => {
+      if (!actor) return [];
+      return actor.getForumTopics(category, BigInt(offset), BigInt(20));
+    },
+    enabled: !!actor && !isFetching,
+    staleTime: 30_000,
+  });
+}
+
+export function useForumTopicById(topicId: bigint | null) {
+  const { actor, isFetching } = useActor();
+  return useQuery<ForumTopic | null>({
+    queryKey: ["forumTopic", topicId?.toString()],
+    queryFn: async () => {
+      if (!actor || topicId === null) return null;
+      return actor.getForumTopicById(topicId);
+    },
+    enabled: !!actor && !isFetching && topicId !== null,
+  });
+}
+
+export function useForumReplies(topicId: bigint | null) {
+  const { actor, isFetching } = useActor();
+  return useQuery<ForumReply[]>({
+    queryKey: ["forumReplies", topicId?.toString()],
+    queryFn: async () => {
+      if (!actor || topicId === null) return [];
+      return actor.getForumReplies(topicId);
+    },
+    enabled: !!actor && !isFetching && topicId !== null,
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateForumTopic() {
+  const { actor } = useActor();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      title,
+      body,
+      category,
+      proposalId,
+    }: {
+      title: string;
+      body: string;
+      category: string;
+      proposalId?: bigint;
+    }) => {
+      if (!actor) throw new Error("Not authenticated");
+      return actor.createForumTopic(title, body, category, proposalId ?? null);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["forumTopics"] });
+    },
+  });
+}
+
+export function useCreateForumReply(topicId: bigint | null) {
+  const { actor } = useActor();
+  const { identity } = useInternetIdentity();
+  const qc = useQueryClient();
+  const queryKey = ["forumReplies", topicId?.toString()];
+  return useMutation({
+    mutationFn: async ({
+      body,
+      parentId,
+    }: { body: string; parentId?: bigint }) => {
+      if (!actor || topicId === null) throw new Error("Not ready");
+      return actor.createForumReply(topicId, body, parentId ?? null);
+    },
+    onMutate: async ({
+      body,
+      parentId,
+    }: { body: string; parentId?: bigint }) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<ForumReply[]>(queryKey);
+      const fakeAuthor =
+        identity?.getPrincipal() ?? ({ toString: () => "you" } as any);
+      const fakeReply: ForumReply = {
+        id: BigInt(-Date.now()),
+        topicId: topicId ?? BigInt(0),
+        body,
+        author: fakeAuthor,
+        parentId: parentId ?? undefined,
+        createdAt: BigInt(Date.now()) * BigInt(1_000_000),
+        upvotes: BigInt(0),
+      };
+      qc.setQueryData<ForumReply[]>(queryKey, (old) => [
+        ...(old ?? []),
+        fakeReply,
+      ]);
+      return { previous };
+    },
+    onError: (
+      _err,
+      _vars,
+      context: { previous?: ForumReply[] } | undefined,
+    ) => {
+      if (context?.previous !== undefined)
+        qc.setQueryData(queryKey, context.previous);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey }),
+  });
+}
+
+export function useUpvoteForumTopic() {
+  const { actor } = useActor();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (topicId: bigint) => {
+      if (!actor) throw new Error("Not authenticated");
+      await actor.upvoteForumTopic(topicId);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["forumTopics"] });
+      qc.invalidateQueries({ queryKey: ["forumTopic"] });
+    },
+  });
+}
+
+export function useUpvoteForumReply(topicId: bigint | null) {
+  const { actor } = useActor();
+  const qc = useQueryClient();
+  const queryKey = ["forumReplies", topicId?.toString()];
+  return useMutation({
+    mutationFn: async (replyId: bigint) => {
+      if (!actor || topicId === null) throw new Error("Not ready");
+      await actor.upvoteForumReply(topicId, replyId);
+    },
+    onMutate: async (replyId: bigint) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<ForumReply[]>(queryKey);
+      qc.setQueryData<ForumReply[]>(queryKey, (old) =>
+        (old ?? []).map((r) =>
+          r.id === replyId ? { ...r, upvotes: r.upvotes + BigInt(1) } : r,
+        ),
+      );
+      return { previous };
+    },
+    onError: (
+      _err,
+      _vars,
+      context: { previous?: ForumReply[] } | undefined,
+    ) => {
+      if (context?.previous !== undefined)
+        qc.setQueryData(queryKey, context.previous);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey }),
   });
 }
 

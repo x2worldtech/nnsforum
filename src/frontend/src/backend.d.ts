@@ -39,6 +39,26 @@ export interface ProposalVoteCounts {
     upvotes: bigint;
     downvotes: bigint;
 }
+export interface ForumTopic {
+    id: bigint;
+    title: string;
+    body: string;
+    author: Principal;
+    category: string;
+    proposalId?: bigint;
+    createdAt: bigint;
+    replyCount: bigint;
+    upvotes: bigint;
+}
+export interface ForumReply {
+    id: bigint;
+    topicId: bigint;
+    body: string;
+    author: Principal;
+    parentId?: bigint;
+    createdAt: bigint;
+    upvotes: bigint;
+}
 export enum UserRole {
     admin = "admin",
     user = "user",
@@ -64,4 +84,12 @@ export interface backendInterface {
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
     upvoteComment(commentId: bigint, proposalId: bigint): Promise<void>;
     voteOnProposal(proposalId: bigint, isUpvote: boolean): Promise<void>;
+    createForumTopic(title: string, body: string, category: string, proposalId: bigint | null): Promise<bigint>;
+    getForumTopics(category: string | null, offset: bigint, limit: bigint): Promise<Array<ForumTopic>>;
+    getForumTopicById(topicId: bigint): Promise<ForumTopic | null>;
+    getForumTopicsCount(category: string | null): Promise<bigint>;
+    createForumReply(topicId: bigint, body: string, parentId: bigint | null): Promise<bigint>;
+    getForumReplies(topicId: bigint): Promise<Array<ForumReply>>;
+    upvoteForumTopic(topicId: bigint): Promise<void>;
+    upvoteForumReply(topicId: bigint, replyId: bigint): Promise<void>;
 }

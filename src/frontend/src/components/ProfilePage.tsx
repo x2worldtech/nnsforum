@@ -43,7 +43,7 @@ function UsernameStatus({
     return (
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Loader2 className="w-3 h-3 animate-spin" />
-        Prüfen…
+        Checking…
       </span>
     );
   }
@@ -54,7 +54,7 @@ function UsernameStatus({
         className="flex items-center gap-1 text-xs text-emerald-400"
       >
         <CheckCircle2 className="w-3 h-3" />
-        Verfügbar
+        Available
       </span>
     );
   }
@@ -65,7 +65,7 @@ function UsernameStatus({
         className="flex items-center gap-1 text-xs text-destructive"
       >
         <XCircle className="w-3 h-3" />
-        Vergeben
+        Taken
       </span>
     );
   }
@@ -185,10 +185,10 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
         socialLinks,
         avatar,
       });
-      toast.success("Profil gespeichert!");
+      toast.success("Profile saved!");
       setAvatarFile(null);
     } catch {
-      toast.error("Fehler beim Speichern des Profils");
+      toast.error("Error saving profile");
     }
   };
 
@@ -209,7 +209,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <h1 className="text-base font-semibold text-foreground">Profil</h1>
+          <h1 className="text-base font-semibold text-foreground">Profile</h1>
         </div>
       </div>
 
@@ -225,10 +225,10 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
             </div>
             <div>
               <h2 className="text-lg font-semibold text-foreground mb-1">
-                Bitte einloggen
+                Please sign in
               </h2>
               <p className="text-sm text-muted-foreground">
-                Melde dich an, um dein Profil zu bearbeiten.
+                Sign in to edit your profile.
               </p>
             </div>
             <Button
@@ -237,7 +237,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
               className="gap-2 font-semibold"
             >
               <span className="text-base leading-none">∞</span>
-              Login mit Internet Identity
+              Sign In with Internet Identity
             </Button>
           </div>
         ) : isLoadingProfile ? (
@@ -293,17 +293,17 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
               </div>
               <div>
                 <p className="text-sm font-medium text-foreground">
-                  Profilbild
+                  Profile Picture
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  JPG, PNG oder GIF · max. 2 MB
+                  JPG, PNG or GIF · max. 2 MB
                 </p>
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className="mt-2 text-xs text-primary hover:underline"
                 >
-                  Bild ändern
+                  Change photo
                 </button>
               </div>
             </div>
@@ -325,7 +325,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                   data-ocid="profile.username.input"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="dein_nutzername"
+                  placeholder="your_username"
                   maxLength={30}
                   className="bg-card border-border text-foreground placeholder:text-muted-foreground pr-32"
                 />
@@ -340,7 +340,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                3–30 Zeichen, nur Buchstaben, Zahlen und Unterstriche
+                3–30 characters, letters, numbers, and underscores only
               </p>
             </div>
 
@@ -357,7 +357,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                 data-ocid="profile.bio.textarea"
                 value={bio}
                 onChange={(e) => setBio(e.target.value)}
-                placeholder="Erzähl etwas über dich…"
+                placeholder="Tell us something about you…"
                 rows={3}
                 maxLength={300}
                 className="resize-none bg-card border-border text-foreground placeholder:text-muted-foreground"
@@ -385,7 +385,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                     onChange={(e) =>
                       setSocialLinks((prev) => ({ ...prev, x: e.target.value }))
                     }
-                    placeholder="https://x.com/dein_name"
+                    placeholder="https://x.com/your_name"
                     className="bg-card border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
@@ -404,7 +404,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                         github: e.target.value,
                       }))
                     }
-                    placeholder="https://github.com/dein_name"
+                    placeholder="https://github.com/your_name"
                     className="bg-card border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
@@ -423,7 +423,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                         linkedin: e.target.value,
                       }))
                     }
-                    placeholder="https://linkedin.com/in/dein_name"
+                    placeholder="https://linkedin.com/in/your_name"
                     className="bg-card border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
@@ -442,7 +442,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                         telegram: e.target.value,
                       }))
                     }
-                    placeholder="https://t.me/dein_name"
+                    placeholder="https://t.me/your_name"
                     className="bg-card border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
@@ -456,7 +456,7 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
               )}
             >
               <p className="text-xs text-muted-foreground">
-                Alle Angaben sind optional und öffentlich sichtbar.
+                All fields are optional and publicly visible.
               </p>
               <Button
                 data-ocid="profile.save.submit_button"
@@ -467,10 +467,10 @@ export function ProfilePage({ onBack }: ProfilePageProps) {
                 {saveProfile.isPending ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Speichern…
+                    Saving…
                   </>
                 ) : (
-                  "Speichern"
+                  "Save"
                 )}
               </Button>
             </div>
