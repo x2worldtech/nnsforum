@@ -450,7 +450,7 @@ function MobileContent({
                       Reject {noPct}%
                     </span>
                   </div>
-                  <div className="relative h-2 rounded-full bg-white/10 overflow-visible">
+                  <div className="relative h-2 rounded-full bg-black/10 dark:bg-white/10 overflow-visible">
                     {/* Green adopt bar from left */}
                     <div
                       className="absolute left-0 top-0 h-full rounded-l-full bg-[var(--nns-teal)] transition-all duration-700"
@@ -462,7 +462,7 @@ function MobileContent({
                       style={{ width: `${Math.min(noPctNum, 100)}%` }}
                     />
                     {/* Center 50% marker */}
-                    <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-0.5 h-4 bg-white/60 rounded-full z-10" />
+                    <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-0.5 h-4 bg-black/50 dark:bg-white/60 rounded-full z-10" />
                   </div>
                   <div className="flex justify-between text-[11px] text-muted-foreground min-w-0 mt-1">
                     <div className="flex flex-col items-start min-w-0">
