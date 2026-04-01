@@ -911,7 +911,7 @@ const CONTINENT_POLYS: Array<Array<[number, number]>> = [
 
 // ─── Dot-matrix land points ───────────────────────────────────────────────────
 const LAND_POINTS: THREE.Vector3[] = [];
-const STEP = 1.6; // degrees – balance quality vs perf
+const STEP = 0.7; // degrees – higher density for more accurate continent outlines
 for (let lat = -90; lat <= 90; lat += STEP) {
   for (let lng = -180; lng <= 180; lng += STEP) {
     if (isLandPoint(lat, lng)) {
@@ -959,7 +959,7 @@ function LandDots() {
       args={[undefined, undefined, count]}
       frustumCulled={false}
     >
-      <sphereGeometry args={[0.006, 4, 4]} />
+      <sphereGeometry args={[0.0028, 4, 4]} />
       <meshBasicMaterial color="#3a86ff" transparent opacity={0.88} />
     </instancedMesh>
   );
