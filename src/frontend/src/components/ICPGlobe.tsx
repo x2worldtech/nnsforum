@@ -929,6 +929,9 @@ const STARS = Array.from({ length: 120 }, (_, i) => ({
   opacity: 0.12 + ((i * 53 + 7) % 10) * 0.04,
 }));
 
+// ─── Pitch clamp constant ─────────────────────────────────────────────────────
+const MAX_PITCH = 65 * (Math.PI / 180);
+
 // ─── Components ───────────────────────────────────────────────────────────────
 
 interface GlobeMarker {
@@ -1071,13 +1074,22 @@ function GridLines() {
   );
 }
 
-function GlobeScene({ markers }: { markers: GlobeMarker[] }) {
+interface GlobeSceneProps {
+  markers: GlobeMarker[];
+  rotRef: React.MutableRefObject<{ x: number; y: number }>;
+  isDragging: React.MutableRefObject<boolean>;
+}
+
+function GlobeScene({ markers, rotRef, isDragging }: GlobeSceneProps) {
   const groupRef = useRef<THREE.Group>(null);
 
   useFrame((_, delta) => {
-    if (groupRef.current) {
-      groupRef.current.rotation.y += delta * 0.1;
+    if (!groupRef.current) return;
+    if (!isDragging.current) {
+      rotRef.current.y += delta * 0.1;
     }
+    groupRef.current.rotation.y = rotRef.current.y;
+    groupRef.current.rotation.x = rotRef.current.x;
   });
 
   return (
@@ -1265,6 +1277,12 @@ export function ICPGlobe() {
   const [markers, setMarkers] = useState<GlobeMarker[]>([]);
   const [officialDcCount, setOfficialDcCount] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [grabbing, setGrabbing] = useState(false);
+
+  // Rotation state shared with GlobeScene via refs
+  const rotRef = useRef({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     fetchNodeLocations().then(({ markers: m, officialDcCount: c }) => {
@@ -1273,6 +1291,30 @@ export function ICPGlobe() {
       setLoaded(true);
     });
   }, []);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    isDragging.current = true;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setGrabbing(true);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging.current) return;
+    const dx = e.clientX - lastPos.current.x;
+    const dy = e.clientY - lastPos.current.y;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+    rotRef.current.y += dx * 0.005;
+    rotRef.current.x = Math.max(
+      -MAX_PITCH,
+      Math.min(MAX_PITCH, rotRef.current.x + dy * 0.005),
+    );
+  };
+
+  const handlePointerUp = () => {
+    isDragging.current = false;
+    setGrabbing(false);
+  };
 
   return (
     <div
@@ -1305,7 +1347,17 @@ export function ICPGlobe() {
         }}
       />
 
-      <div style={{ height: "clamp(300px, 48vw, 520px)" }}>
+      <div
+        style={{
+          height: "clamp(300px, 48vw, 520px)",
+          cursor: grabbing ? "grabbing" : "grab",
+          touchAction: "none",
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
         {!loaded ? (
           <GlobeSkeletonFallback />
         ) : (
@@ -1328,7 +1380,11 @@ export function ICPGlobe() {
             />
             <pointLight position={[0, 0, 3]} intensity={0.2} color="#4488ff" />
             <Suspense fallback={null}>
-              <GlobeScene markers={markers} />
+              <GlobeScene
+                markers={markers}
+                rotRef={rotRef}
+                isDragging={isDragging}
+              />
             </Suspense>
           </Canvas>
         )}
