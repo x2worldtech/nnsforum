@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+  Activity,
   Heart,
   LayoutGrid,
   LogOut,
@@ -16,7 +17,7 @@ import { useState } from "react";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import { useTheme } from "../hooks/useTheme";
 
-export type Page = "all" | "favorites" | "profile" | "forum";
+export type Page = "all" | "favorites" | "profile" | "forum" | "dashboard";
 
 interface TopNavProps {
   currentPage: Page;
@@ -101,6 +102,20 @@ export function TopNav({ currentPage, onNavigate }: TopNavProps) {
             >
               <MessageSquare className="w-3.5 h-3.5" />
               Open Forum
+            </button>
+            <button
+              type="button"
+              data-ocid="nav.dashboard.link"
+              onClick={() => onNavigate("dashboard")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                currentPage === "dashboard"
+                  ? "text-foreground bg-secondary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
+              )}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Dashboard
             </button>
             {isLoggedIn && (
               <button
@@ -267,6 +282,23 @@ export function TopNav({ currentPage, onNavigate }: TopNavProps) {
                 >
                   <MessageSquare className="w-4 h-4" />
                   Open Forum
+                </button>
+                <button
+                  type="button"
+                  data-ocid="nav.dashboard.link"
+                  onClick={() => {
+                    onNavigate("dashboard");
+                    setMobileOpen(false);
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-colors",
+                    currentPage === "dashboard"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+                  )}
+                >
+                  <Activity className="w-4 h-4" />
+                  Dashboard
                 </button>
                 {isLoggedIn && (
                   <button

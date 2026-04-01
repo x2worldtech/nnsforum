@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { Loader2, LogIn, RefreshCw, Search } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useMemo, useState } from "react";
+import { ICPNetworkDashboard } from "./components/ICPNetworkDashboard";
 import { NetworkBackground } from "./components/NetworkBackground";
 import { OpenForum } from "./components/OpenForum";
 import { ProfilePage } from "./components/ProfilePage";
@@ -227,6 +228,9 @@ function Dashboard() {
           }}
         />
       )}
+
+      {/* ICP Network Dashboard */}
+      {currentPage === "dashboard" && <ICPNetworkDashboard />}
 
       {/* Hero section — only on All Proposals */}
       {currentPage === "all" && (
