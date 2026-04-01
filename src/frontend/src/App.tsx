@@ -253,15 +253,10 @@ function Dashboard() {
       {isProposalsPage && (
         <main className="max-w-7xl mx-auto px-5 sm:px-8 pb-12">
           {currentPage === "all" && (
-            <div className="mb-5 flex items-baseline gap-3 mt-6">
+            <div className="mb-5 mt-6">
               <h2 className="text-lg font-semibold text-foreground">
                 Proposals
               </h2>
-              {!isLoading && proposalCount > 0 && (
-                <span className="text-sm text-muted-foreground">
-                  {proposalCount.toLocaleString("en-US")} total
-                </span>
-              )}
             </div>
           )}
 
