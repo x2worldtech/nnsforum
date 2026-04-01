@@ -70,11 +70,11 @@ function HeroSection({
           className="flex flex-col gap-6"
         >
           <h1 className="text-[clamp(32px,5vw,58px)] font-extrabold text-white leading-[1.04] tracking-tight max-w-2xl">
-            Benefit by helping
+            Build value by
             <br />
-            the network
+            thinking
             <br />
-            think
+            together
           </h1>
 
           <div className="flex flex-wrap gap-x-10 gap-y-4">
