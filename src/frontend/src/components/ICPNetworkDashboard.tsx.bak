@@ -15,7 +15,6 @@ interface NetworkStats {
   nodeProviders: number | null;
   icpTotalSupply: number | null;
   totalCanisters: number | null;
-  totalDatacenters: number | null;
 }
 
 async function fetchWithTimeout(
@@ -133,7 +132,6 @@ async function fetchStats(): Promise<NetworkStats> {
     providersRes,
     supplyRes,
     canistersRes,
-    dataCentersRes,
   ] = await Promise.allSettled([
     fetchMetric("cycle-burn-rate", "cycle_burn_rate"),
     fetchMetric("message-execution-rate", "message_execution_rate"),
@@ -153,9 +151,6 @@ async function fetchStats(): Promise<NetworkStats> {
     ).then((r) => r.json()),
     fetchWithTimeout(
       "https://ic-api.internetcomputer.org/api/v3/canisters?limit=1",
-    ).then((r) => r.json()),
-    fetchWithTimeout(
-      "https://ic-api.internetcomputer.org/api/v3/data-centers",
     ).then((r) => r.json()),
   ]);
 
@@ -221,17 +216,6 @@ async function fetchStats(): Promise<NetworkStats> {
     );
   }
 
-  let totalDatacenters: number | null = null;
-  if (dataCentersRes.status === "fulfilled") {
-    const d = dataCentersRes.value;
-    const arr = Array.isArray(d)
-      ? d
-      : Array.isArray(d?.data_centers)
-        ? d.data_centers
-        : null;
-    if (arr !== null) totalDatacenters = arr.length;
-  }
-
   return {
     cycleBurnRate,
     transactionsPerSecond,
@@ -242,7 +226,6 @@ async function fetchStats(): Promise<NetworkStats> {
     nodeProviders,
     icpTotalSupply,
     totalCanisters,
-    totalDatacenters,
   };
 }
 
@@ -391,14 +374,6 @@ export function ICPNetworkDashboard() {
         stats?.nodeProviders != null
           ? stats.nodeProviders.toLocaleString("en-US")
           : "\u2014",
-      unit: undefined,
-    },
-    {
-      label: "Data Centers",
-      value:
-        stats?.totalDatacenters != null
-          ? stats.totalDatacenters.toLocaleString("en-US")
-          : "—",
       unit: undefined,
     },
     {

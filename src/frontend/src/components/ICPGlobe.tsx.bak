@@ -1135,11 +1135,7 @@ function GlobeScene({ markers }: { markers: GlobeMarker[] }) {
 }
 
 // ─── Data fetching ─────────────────────────────────────────────────────────────
-async function fetchNodeLocations(): Promise<{
-  markers: GlobeMarker[];
-  officialDcCount: number | null;
-}> {
-  let officialDcCount: number | null = null;
+async function fetchNodeLocations(): Promise<GlobeMarker[]> {
   const seen = new Set<string>();
   const usedCoords = new Map<string, number>();
   const markers: GlobeMarker[] = [];
@@ -1182,8 +1178,6 @@ async function fetchNodeLocations(): Promise<{
         : Array.isArray(json?.data_centers)
           ? json.data_centers
           : [];
-
-      if (dcs.length > 0) officialDcCount = dcs.length;
 
       for (const dc of dcs) {
         const id = (dc.id ?? dc.dc_id ?? dc.name ?? "").toLowerCase();
@@ -1238,7 +1232,7 @@ async function fetchNodeLocations(): Promise<{
     }
   }
 
-  return { markers, officialDcCount };
+  return markers;
 }
 
 function GlobeSkeletonFallback() {
@@ -1263,13 +1257,11 @@ function GlobeSkeletonFallback() {
 // ─── Export ────────────────────────────────────────────────────────────────────
 export function ICPGlobe() {
   const [markers, setMarkers] = useState<GlobeMarker[]>([]);
-  const [officialDcCount, setOfficialDcCount] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    fetchNodeLocations().then(({ markers: m, officialDcCount: c }) => {
+    fetchNodeLocations().then((m) => {
       setMarkers(m);
-      setOfficialDcCount(c);
       setLoaded(true);
     });
   }, []);
@@ -1354,8 +1346,7 @@ export function ICPGlobe() {
         </div>
         {loaded && markers.length > 0 && (
           <span className="text-xs" style={{ color: "rgba(80,150,200,0.6)" }}>
-            {officialDcCount !== null ? officialDcCount : markers.length}{" "}
-            datacenters tracked
+            {markers.length} datacenters tracked
           </span>
         )}
       </div>
