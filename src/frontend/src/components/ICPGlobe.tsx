@@ -1,3 +1,9 @@
+import {
+  type GeoPermissibleObjects,
+  geoGraticule,
+  geoOrthographic,
+  geoPath,
+} from "d3-geo";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -18,6 +24,9 @@ interface Marker {
   lng: number;
   label: string;
 }
+
+// d3-geo accepts a "Sphere" object (not in standard GeoJSON spec)
+type SphereObject = { type: "Sphere" };
 
 // ─── Known ICP datacenter locations ───────────────────────────────────────────
 const KNOWN_LOCATIONS: Record<string, [number, number]> = {
@@ -260,103 +269,51 @@ function topoToGeo(topo: Record<string, unknown>, objectName: string): GeoJson {
   }
 }
 
+// Sphere object constant - d3-geo treats { type: "Sphere" } as the full globe outline
+const SPHERE = { type: "Sphere" } as unknown as GeoPermissibleObjects;
+
 // ─── Pulse state for sequential blinking (max 3, never simultaneous) ──────────
 const MAX_BLINK_SLOTS = 3;
 const CYCLE_DURATION = 4.0;
 const BLINK_DURATION = 0.9;
 const SLOT_OFFSET = CYCLE_DURATION / MAX_BLINK_SLOTS;
 
-// ─── Orthographic projection helpers ────────────────────────────────────────
-
-// Project a [lon, lat] coordinate under current rotation to canvas [x, y].
-// Returns null if the point is on the back hemisphere (dot <= 0).
-function project(
-  lon: number,
-  lat: number,
-  rotLon: number,
-  rotLat: number,
-  cx: number,
-  cy: number,
-  radius: number,
-): [number, number] | null {
-  // Apply globe rotation: shift lon/lat by the rotation
-  const adjLon = ((lon - rotLon + 540) % 360) - 180;
-  const adjLat = lat + rotLat;
-
-  const latR = (adjLat * Math.PI) / 180;
-  const lonR = (adjLon * Math.PI) / 180;
-
-  // Clamp lat to avoid poles overflow
-  const clampedLat = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, latR));
-
-  // Orthographic: project onto the unit sphere viewed from +Z
-  const x = Math.cos(clampedLat) * Math.sin(lonR);
-  const y = -Math.sin(clampedLat);
-  const z = Math.cos(clampedLat) * Math.cos(lonR);
-
-  // Back-face culling: only draw if z > 0 (visible hemisphere)
-  if (z <= 0) return null;
-
-  return [cx + x * radius, cy + y * radius];
-}
-
-// Returns the raw dot product for a lat/lng against the viewer.
-// Positive = facing viewer, negative = behind globe.
-// Used for smooth edge-fade calculation.
-function getPointDot(
+// ─── Check if a lat/lng point is on the visible hemisphere ───────────────────
+// The globe is rotated by [rotLon, rotLat]. A point is visible when the
+// dot-product of its 3D unit vector with the camera direction is > 0.
+function isPointVisible(
   lat: number,
   lng: number,
   rotLon: number,
   rotLat: number,
-): number {
+): boolean {
+  // Convert marker geographic coords to radians
   const latR = (lat * Math.PI) / 180;
   const lngR = (lng * Math.PI) / 180;
+
+  // Convert rotation to radians (d3 rotate is [lon, lat] = [-λ, -φ] applied)
   const rotLonR = (rotLon * Math.PI) / 180;
   const rotLatR = (rotLat * Math.PI) / 180;
 
+  // Marker unit vector in globe-local space
   const mx = Math.cos(latR) * Math.cos(lngR);
   const my = Math.cos(latR) * Math.sin(lngR);
   const mz = Math.sin(latR);
 
+  // Camera direction in globe-local space:
+  // d3 geoOrthographic with rotate([rotLon, rotLat]) means the viewer looks at
+  // the point on the globe with longitude = -rotLon, latitude = -rotLat.
   const viewLat = -rotLatR;
   const viewLng = -rotLonR;
-  const vcx = Math.cos(viewLat) * Math.cos(viewLng);
-  const vcy = Math.cos(viewLat) * Math.sin(viewLng);
-  const vcz = Math.sin(viewLat);
+  const cx = Math.cos(viewLat) * Math.cos(viewLng);
+  const cy2 = Math.cos(viewLat) * Math.sin(viewLng);
+  const cz = Math.sin(viewLat);
 
-  return mx * vcx + my * vcy + mz * vcz;
+  // Dot product: positive means facing the viewer
+  return mx * cx + my * cy2 + mz * cz > 0;
 }
 
-// Draw a polygon ring with visibility culling per segment.
-// Skips segments where both endpoints are on the back hemisphere.
-// Uses canvas clip to prevent drawing outside the globe disc.
-function drawRing(
-  ctx: CanvasRenderingContext2D,
-  ring: number[][],
-  rotLon: number,
-  rotLat: number,
-  cx: number,
-  cy: number,
-  radius: number,
-) {
-  let started = false;
-  for (let i = 0; i < ring.length; i++) {
-    const [lon, lat] = ring[i];
-    const pt = project(lon, lat, rotLon, rotLat, cx, cy, radius);
-    if (pt === null) {
-      started = false;
-      continue;
-    }
-    if (!started) {
-      ctx.moveTo(pt[0], pt[1]);
-      started = true;
-    } else {
-      ctx.lineTo(pt[0], pt[1]);
-    }
-  }
-}
-
-// ─── Globe canvas renderer ─────────────────────────────────────────────────────
+// ─── Globe canvas renderer using d3-geo ───────────────────────────────────────
 function drawGlobe(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -375,6 +332,15 @@ function drawGlobe(
   const cy = height / 2;
   const radius = Math.min(width, height) * 0.42;
 
+  const projection = geoOrthographic()
+    .scale(radius)
+    .translate([cx, cy])
+    .rotate([rotLon, rotLat, 0])
+    .clipAngle(90);
+
+  const pathGen = geoPath(projection, ctx);
+  const graticule = geoGraticule().step([30, 20]);
+
   // ── Ocean fill ───────────────────────────────────────────────────────────────
   const oceanGrad = ctx.createRadialGradient(
     cx - radius * 0.2,
@@ -389,108 +355,38 @@ function drawGlobe(
   oceanGrad.addColorStop(1, "#020810");
 
   ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  pathGen(SPHERE);
   ctx.fillStyle = oceanGrad;
   ctx.fill();
 
-  // ── Clip all continent/graticule drawing to the globe disc ─────────────────
-  ctx.save();
+  // ── Graticule ────────────────────────────────────────────────────────────────
   ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-  ctx.clip();
-
-  // ── Graticule (grid lines) ────────────────────────────────────────────────────
+  pathGen(graticule());
   ctx.strokeStyle = "rgba(30, 80, 160, 0.25)";
   ctx.lineWidth = 0.5 * dpr;
-
-  // Longitude lines every 30°
-  for (let lon = -180; lon <= 180; lon += 30) {
-    ctx.beginPath();
-    for (let lat = -90; lat <= 90; lat += 3) {
-      const pt = project(lon, lat, rotLon, rotLat, cx, cy, radius);
-      if (pt === null) continue;
-      if (lat === -90) ctx.moveTo(pt[0], pt[1]);
-      else ctx.lineTo(pt[0], pt[1]);
-    }
-    ctx.stroke();
-  }
-
-  // Latitude lines every 20°
-  for (let lat = -80; lat <= 80; lat += 20) {
-    ctx.beginPath();
-    let started = false;
-    for (let lon = -180; lon <= 180; lon += 3) {
-      const pt = project(lon, lat, rotLon, rotLat, cx, cy, radius);
-      if (pt === null) {
-        started = false;
-        continue;
-      }
-      if (!started) {
-        ctx.moveTo(pt[0], pt[1]);
-        started = true;
-      } else {
-        ctx.lineTo(pt[0], pt[1]);
-      }
-    }
-    ctx.stroke();
-  }
+  ctx.stroke();
 
   // ── Land fill ────────────────────────────────────────────────────────────────
   if (geoJson) {
-    // Fill pass
-    ctx.fillStyle = "rgba(28, 85, 180, 0.55)";
+    ctx.beginPath();
     for (const feature of geoJson.features) {
-      const { geometry } = feature;
-      if (geometry.type === "Polygon") {
-        const rings = geometry.coordinates as number[][][];
-        ctx.beginPath();
-        for (const ring of rings) {
-          drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
-        }
-        ctx.fill();
-      } else if (geometry.type === "MultiPolygon") {
-        const polys = geometry.coordinates as number[][][][];
-        for (const poly of polys) {
-          ctx.beginPath();
-          for (const ring of poly) {
-            drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
-          }
-          ctx.fill();
-        }
-      }
+      pathGen(feature as unknown as GeoPermissibleObjects);
     }
+    ctx.fillStyle = "rgba(28, 85, 180, 0.55)";
+    ctx.fill();
 
-    // Stroke pass
+    ctx.beginPath();
+    for (const feature of geoJson.features) {
+      pathGen(feature as unknown as GeoPermissibleObjects);
+    }
     ctx.strokeStyle = "rgba(80, 160, 255, 0.9)";
     ctx.lineWidth = 0.8 * dpr;
-    for (const feature of geoJson.features) {
-      const { geometry } = feature;
-      if (geometry.type === "Polygon") {
-        const rings = geometry.coordinates as number[][][];
-        ctx.beginPath();
-        for (const ring of rings) {
-          drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
-        }
-        ctx.stroke();
-      } else if (geometry.type === "MultiPolygon") {
-        const polys = geometry.coordinates as number[][][][];
-        for (const poly of polys) {
-          ctx.beginPath();
-          for (const ring of poly) {
-            drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
-          }
-          ctx.stroke();
-        }
-      }
-    }
+    ctx.stroke();
   }
-
-  // Restore clip
-  ctx.restore();
 
   // ── Globe border ─────────────────────────────────────────────────────────────
   ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  pathGen(SPHERE);
   ctx.strokeStyle = "rgba(60, 140, 255, 0.4)";
   ctx.lineWidth = 1.5 * dpr;
   ctx.stroke();
@@ -519,17 +415,12 @@ function drawGlobe(
   for (let i = 0; i < markers.length; i++) {
     const m = markers[i];
 
-    // ── Dot product: positive = facing viewer, negative = behind globe ────────
-    const dot = getPointDot(m.lat, m.lng, rotLon, rotLat);
-    if (dot <= 0) continue;
+    // ── Visibility check: skip markers on the back of the globe ──────────────
+    if (!isPointVisible(m.lat, m.lng, rotLon, rotLat)) continue;
 
-    // ── Edge fade: smoothstep from 0 (horizon) to 1 (dot >= 0.25) ────────────
-    const edgeFade = Math.min(1, dot / 0.25);
-    const smoothEdgeFade = edgeFade * edgeFade * (3 - 2 * edgeFade);
-
-    const pt = project(m.lng, m.lat, rotLon, rotLat, cx, cy, radius);
-    if (pt === null) continue;
-    const [x, y] = pt;
+    const projected = projection([m.lng, m.lat]);
+    if (projected === null) continue;
+    const [x, y] = projected;
 
     const intensity = blinkIntensity.get(i) ?? 0;
 
@@ -539,16 +430,13 @@ function drawGlobe(
       const ringR = (6 + 14 * ringExpand) * dpr;
       ctx.beginPath();
       ctx.arc(x, y, ringR, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(0, 229, 255, ${0.55 * intensity * smoothEdgeFade})`;
+      ctx.strokeStyle = `rgba(0, 229, 255, ${0.55 * intensity})`;
       ctx.lineWidth = 1 * dpr;
       ctx.stroke();
 
       // Glow
       const glowGrad = ctx.createRadialGradient(x, y, 0, x, y, 8 * dpr);
-      glowGrad.addColorStop(
-        0,
-        `rgba(0, 229, 255, ${0.5 * intensity * smoothEdgeFade})`,
-      );
+      glowGrad.addColorStop(0, `rgba(0, 229, 255, ${0.5 * intensity})`);
       glowGrad.addColorStop(1, "rgba(0, 229, 255, 0)");
       ctx.beginPath();
       ctx.arc(x, y, 8 * dpr, 0, Math.PI * 2);
@@ -556,10 +444,10 @@ function drawGlobe(
       ctx.fill();
     }
 
-    // Core dot — fades at the edges for a smooth horizon transition
+    // Core dot — always visible on front hemisphere, slightly brighter when blinking
     ctx.beginPath();
     ctx.arc(x, y, 3 * dpr, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 255, 255, ${(0.55 + 0.4 * intensity) * smoothEdgeFade})`;
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.55 + 0.4 * intensity})`;
     ctx.fill();
   }
 
@@ -746,6 +634,10 @@ export function ICPGlobe() {
   const markersRef = useRef<Marker[]>([]);
   const activeMarkerIndicesRef = useRef<number[]>([]);
 
+  // Suppress unused type
+  const _unusedSphereType: SphereObject = { type: "Sphere" };
+  void _unusedSphereType;
+
   useEffect(() => {
     fetchData().then(({ geoJson, markers, officialDcCount: cnt }) => {
       geoJsonRef.current = geoJson;
@@ -827,10 +719,10 @@ export function ICPGlobe() {
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
     lastPos.current = { x: e.clientX, y: e.clientY };
-    rotRef.current.lon -= dx * 0.3;
+    rotRef.current.lon += dx * 0.3;
     rotRef.current.lat = Math.max(
       -MAX_PITCH_DEG,
-      Math.min(MAX_PITCH_DEG, rotRef.current.lat + dy * 0.3),
+      Math.min(MAX_PITCH_DEG, rotRef.current.lat - dy * 0.3),
     );
   };
 
