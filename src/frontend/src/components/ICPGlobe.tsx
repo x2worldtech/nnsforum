@@ -1,56 +1,71 @@
-import { Canvas, useFrame } from "@react-three/fiber";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import * as THREE from "three";
+import {
+  type GeoPermissibleObjects,
+  geoGraticule,
+  geoOrthographic,
+  geoPath,
+} from "d3-geo";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-// ─── Comprehensive ICP datacenter locations ───────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────────────────
+interface GeoJsonFeature {
+  type: string;
+  geometry: {
+    type: string;
+    coordinates: number[][][] | number[][][][];
+  };
+}
+interface GeoJson {
+  type: string;
+  features: GeoJsonFeature[];
+}
+
+interface Marker {
+  lat: number;
+  lng: number;
+  label: string;
+}
+
+// d3-geo accepts a "Sphere" object (not in standard GeoJSON spec)
+type SphereObject = { type: "Sphere" };
+
+// ─── Known ICP datacenter locations ───────────────────────────────────────────
 const KNOWN_LOCATIONS: Record<string, [number, number]> = {
-  // Europe – Switzerland
   zh1: [47.37, 8.54],
   zh2: [47.37, 8.54],
   zh3: [47.37, 8.54],
   zh4: [47.37, 8.54],
   ge1: [46.2, 6.15],
   be1: [46.95, 7.44],
-  // Europe – Germany
   fr1: [50.11, 8.68],
   fr2: [50.11, 8.68],
   mu1: [48.14, 11.58],
-  // Europe – Netherlands / Belgium
   am1: [52.37, 4.9],
   am2: [52.37, 4.9],
   am3: [52.37, 4.9],
   br1: [50.85, 4.35],
-  // Europe – UK
   lo1: [51.51, -0.13],
   lo2: [51.51, -0.13],
-  // Europe – France
   pa1: [48.86, 2.35],
-  // Europe – Nordics
   st1: [59.33, 18.07],
   st2: [59.33, 18.07],
   he1: [60.17, 24.94],
   os1: [59.91, 10.75],
   co1: [55.68, 12.57],
-  // Europe – Eastern
   pr1: [50.08, 14.43],
   bu1: [44.43, 26.1],
   wa1: [52.23, 21.01],
   vi1: [48.21, 16.37],
-  // Europe – Southern
   ba1: [41.38, 2.18],
   ma1: [40.42, -3.7],
   ro1: [41.9, 12.48],
   du1: [53.33, -6.25],
-  // North America – California
   sj1: [37.33, -121.89],
   sj2: [37.33, -121.89],
   sj3: [37.33, -121.89],
   fm1: [37.55, -121.98],
   fm2: [37.55, -121.98],
   la1: [34.05, -118.24],
-  // North America – Pacific NW
   se2: [47.61, -122.33],
-  // North America – Midwest / South
   ch1: [41.88, -87.63],
   ch2: [41.88, -87.63],
   at1: [33.75, -84.39],
@@ -61,45 +76,33 @@ const KNOWN_LOCATIONS: Record<string, [number, number]> = {
   mi1: [25.77, -80.19],
   ph1: [33.45, -112.07],
   de1: [39.74, -104.98],
-  // North America – East Coast
   va1: [39.04, -77.49],
   va2: [39.04, -77.49],
   va3: [39.04, -77.49],
   ny1: [40.71, -74.01],
   ny2: [40.71, -74.01],
-  // Canada
   to1: [43.65, -79.38],
   to2: [43.65, -79.38],
   mo1: [45.5, -73.57],
-  // Asia – Japan
   ty1: [35.69, 139.69],
   ty2: [35.69, 139.69],
   ty3: [35.69, 139.69],
   os2: [34.69, 135.5],
-  // Asia – Southeast Asia
   sg1: [1.35, 103.82],
   sg2: [1.35, 103.82],
   sg3: [1.35, 103.82],
-  // Asia – Korea
   se1: [37.57, 126.98],
-  // Asia – China
   bj1: [39.9, 116.4],
   sh1: [31.23, 121.47],
-  // Asia – Taiwan
   ta1: [25.04, 121.56],
-  // Asia – Hong Kong
   hk1: [22.32, 114.17],
-  // Asia – India
   mb1: [19.08, 72.88],
   mb2: [19.08, 72.88],
   bl1: [12.97, 77.59],
-  // Oceania
   sy1: [-33.87, 151.21],
   sy2: [-33.87, 151.21],
   me1: [-37.81, 144.96],
-  // South America
   sp1: [-23.55, -46.63],
-  // Middle East / Africa
   db1: [25.2, 55.27],
   ct1: [-33.93, 18.42],
   jo1: [-26.2, 28.04],
@@ -169,7 +172,6 @@ function getCoordFromNode(node: {
   name?: string;
 }): [number, number] | null {
   const id = (node.dc_id ?? node.name ?? "").toLowerCase();
-  // Try exact KNOWN_LOCATIONS first
   for (const [k, v] of Object.entries(KNOWN_LOCATIONS)) {
     if (id.startsWith(k) || k.startsWith(id.replace(/[0-9]/g, ""))) return v;
   }
@@ -182,979 +184,279 @@ function getCoordFromNode(node: {
   return null;
 }
 
-function latLngToVec3(lat: number, lng: number, R: number): THREE.Vector3 {
-  const phi = (90 - lat) * (Math.PI / 180);
-  const theta = (lng + 180) * (Math.PI / 180);
-  return new THREE.Vector3(
-    -R * Math.sin(phi) * Math.cos(theta),
-    R * Math.cos(phi),
-    R * Math.sin(phi) * Math.sin(theta),
+// ─── Inline TopoJSON → GeoJSON converter ──────────────────────────────────────
+function topoToGeo(topo: Record<string, unknown>, objectName: string): GeoJson {
+  try {
+    const objects = topo.objects as Record<string, unknown>;
+    const obj = objects?.[objectName] as {
+      type?: string;
+      geometries?: unknown[];
+    };
+    if (!obj) return { type: "FeatureCollection", features: [] };
+
+    const transform = topo.transform as
+      | { scale?: [number, number]; translate?: [number, number] }
+      | undefined;
+    const arcs = topo.arcs as number[][][];
+
+    function decodeArc(arcIndex: number): number[][] {
+      const isReversed = arcIndex < 0;
+      const idx = isReversed ? ~arcIndex : arcIndex;
+      const arc = arcs[idx];
+      const coords: number[][] = [];
+      let cx = 0;
+      let cy = 0;
+      for (const delta of arc) {
+        cx += delta[0];
+        cy += delta[1];
+        let lon = cx;
+        let lat = cy;
+        if (transform?.scale && transform?.translate) {
+          lon = cx * transform.scale[0] + transform.translate[0];
+          lat = cy * transform.scale[1] + transform.translate[1];
+        }
+        coords.push([lon, lat]);
+      }
+      return isReversed ? coords.reverse() : coords;
+    }
+
+    function decodeRing(arcIndices: number[]): number[][] {
+      const coords: number[][] = [];
+      for (const i of arcIndices) {
+        const arcCoords = decodeArc(i);
+        if (coords.length > 0) arcCoords.shift();
+        coords.push(...arcCoords);
+      }
+      return coords;
+    }
+
+    function decodeGeometry(geom: {
+      type?: string;
+      arcs?: unknown;
+    }): GeoJsonFeature | null {
+      if (geom.type === "Polygon") {
+        const rings = (geom.arcs as number[][]).map((r) => decodeRing(r));
+        return {
+          type: "Feature",
+          geometry: { type: "Polygon", coordinates: rings },
+        };
+      }
+      if (geom.type === "MultiPolygon") {
+        const polys = (geom.arcs as number[][][]).map((poly) =>
+          poly.map((r) => decodeRing(r)),
+        );
+        return {
+          type: "Feature",
+          geometry: { type: "MultiPolygon", coordinates: polys },
+        };
+      }
+      return null;
+    }
+
+    const features: GeoJsonFeature[] = [];
+    if (obj.type === "GeometryCollection" && obj.geometries) {
+      for (const geom of obj.geometries as {
+        type?: string;
+        arcs?: unknown;
+      }[]) {
+        const f = decodeGeometry(geom);
+        if (f) features.push(f);
+      }
+    }
+    return { type: "FeatureCollection", features };
+  } catch {
+    return { type: "FeatureCollection", features: [] };
+  }
+}
+
+// Sphere object constant - d3-geo treats { type: "Sphere" } as the full globe outline
+const SPHERE = { type: "Sphere" } as unknown as GeoPermissibleObjects;
+
+// ─── Globe canvas renderer using d3-geo ───────────────────────────────────────
+function drawGlobe(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  geoJson: GeoJson | null,
+  markers: Marker[],
+  rotLon: number,
+  rotLat: number,
+  pulseT: number,
+  dpr: number,
+) {
+  ctx.clearRect(0, 0, width, height);
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) * 0.42;
+
+  // d3-geo orthographic projection with native antimeridian handling and
+  // automatic horizon clipping via clipAngle(90).
+  const projection = geoOrthographic()
+    .scale(radius)
+    .translate([cx, cy])
+    .rotate([rotLon, rotLat, 0]) // degrees: [lambda, phi, gamma]
+    .clipAngle(90); // clips everything beyond the visible hemisphere
+
+  const pathGen = geoPath(projection, ctx);
+  const graticule = geoGraticule().step([30, 20]);
+
+  // ── Ocean fill ───────────────────────────────────────────────────────────────
+  const oceanGrad = ctx.createRadialGradient(
+    cx - radius * 0.2,
+    cy - radius * 0.2,
+    radius * 0.05,
+    cx,
+    cy,
+    radius,
   );
-}
+  oceanGrad.addColorStop(0, "#0b2044");
+  oceanGrad.addColorStop(0.5, "#06122e");
+  oceanGrad.addColorStop(1, "#020810");
 
-// ─── Point-in-polygon ray casting ────────────────────────────────────────────
-function pointInPolygon(
-  lat: number,
-  lng: number,
-  poly: [number, number][],
-): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [yi, xi] = poly[i];
-    const [yj, xj] = poly[j];
-    if (
-      yi > lat !== yj > lat &&
-      lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi
-    ) {
-      inside = !inside;
+  ctx.beginPath();
+  pathGen(SPHERE);
+  ctx.fillStyle = oceanGrad;
+  ctx.fill();
+
+  // ── Graticule (grid lines) ────────────────────────────────────────────────────
+  ctx.beginPath();
+  pathGen(graticule());
+  ctx.strokeStyle = "rgba(30, 80, 160, 0.25)";
+  ctx.lineWidth = 0.5 * dpr;
+  ctx.stroke();
+
+  // ── Land fill ────────────────────────────────────────────────────────────────
+  if (geoJson) {
+    ctx.beginPath();
+    for (const feature of geoJson.features) {
+      pathGen(feature as unknown as GeoPermissibleObjects);
     }
-  }
-  return inside;
-}
+    ctx.fillStyle = "rgba(28, 85, 180, 0.55)";
+    ctx.fill();
 
-function isLandPoint(lat: number, lng: number): boolean {
-  for (const poly of CONTINENT_POLYS) {
-    if (pointInPolygon(lat, lng, poly)) return true;
-  }
-  return false;
-}
-
-// ─── Detailed continent polygons (lat, lng) ───────────────────────────────────
-const CONTINENT_POLYS: Array<Array<[number, number]>> = [
-  // North America – main body
-  [
-    [71, -156],
-    [70, -148],
-    [68, -140],
-    [60, -137],
-    [58, -136],
-    [56, -132],
-    [54, -130],
-    [50, -124],
-    [48, -124],
-    [46, -124],
-    [42, -124],
-    [38, -122],
-    [34, -120],
-    [30, -117],
-    [28, -110],
-    [22, -105],
-    [18, -103],
-    [15, -92],
-    [15, -85],
-    [18, -84],
-    [20, -87],
-    [21, -90],
-    [21, -87],
-    [16, -86],
-    [14, -83],
-    [10, -83],
-    [8, -82],
-    [8, -77],
-    [9, -77],
-    [10, -75],
-    [12, -71],
-    [11, -63],
-    [12, -62],
-    [10, -60],
-    [10, -62],
-    [8, -60],
-    [12, -70],
-    [15, -67],
-    [18, -66],
-    [19, -69],
-    [20, -74],
-    [19, -72],
-    [18, -73],
-    [18, -72],
-    [20, -72],
-    [23, -75],
-    [24, -77],
-    [25, -80],
-    [25, -81],
-    [24, -81],
-    [26, -80],
-    [29, -89],
-    [29, -90],
-    [30, -88],
-    [30, -84],
-    [28, -82],
-    [28, -80],
-    [26, -80],
-    [30, -81],
-    [32, -79],
-    [35, -76],
-    [37, -76],
-    [40, -74],
-    [41, -70],
-    [42, -70],
-    [44, -66],
-    [44, -64],
-    [46, -60],
-    [47, -53],
-    [52, -55],
-    [57, -61],
-    [60, -64],
-    [63, -64],
-    [64, -63],
-    [62, -69],
-    [60, -78],
-    [58, -78],
-    [55, -79],
-    [52, -79],
-    [51, -80],
-    [52, -82],
-    [54, -83],
-    [56, -79],
-    [58, -78],
-    [60, -77],
-    [62, -78],
-    [63, -78],
-    [65, -83],
-    [67, -85],
-    [68, -87],
-    [69, -90],
-    [68, -95],
-    [68, -100],
-    [70, -103],
-    [71, -100],
-    [72, -96],
-    [74, -92],
-    [76, -90],
-    [80, -87],
-    [82, -80],
-    [83, -70],
-    [82, -65],
-    [80, -67],
-    [78, -68],
-    [76, -68],
-    [74, -68],
-    [72, -72],
-    [68, -75],
-    [66, -66],
-    [64, -65],
-    [62, -65],
-    [60, -64],
-    [58, -68],
-    [56, -62],
-    [52, -56],
-    [50, -57],
-    [48, -53],
-    [47, -52],
-    [48, -54],
-    [50, -57],
-    [52, -55],
-    [54, -58],
-    [56, -60],
-    [58, -62],
-    [60, -65],
-    [62, -70],
-    [64, -72],
-    [66, -75],
-    [68, -80],
-    [68, -90],
-    [69, -96],
-    [70, -100],
-    [70, -110],
-    [69, -116],
-    [68, -120],
-    [69, -128],
-    [71, -132],
-    [71, -142],
-    [70, -148],
-    [70, -152],
-    [68, -155],
-    [66, -162],
-    [64, -166],
-    [63, -163],
-    [62, -165],
-    [60, -162],
-    [58, -158],
-    [56, -160],
-    [55, -163],
-    [54, -165],
-    [57, -170],
-    [63, -170],
-    [65, -166],
-    [66, -163],
-    [68, -162],
-    [70, -157],
-    [71, -152],
-    [71, -156],
-  ],
-  // Greenland
-  [
-    [83, -40],
-    [82, -25],
-    [80, -18],
-    [76, -18],
-    [72, -22],
-    [68, -28],
-    [66, -35],
-    [65, -40],
-    [66, -45],
-    [68, -52],
-    [70, -56],
-    [72, -58],
-    [74, -60],
-    [76, -66],
-    [78, -68],
-    [80, -68],
-    [82, -58],
-    [83, -48],
-    [83, -40],
-  ],
-  // South America
-  [
-    [12, -71],
-    [10, -62],
-    [8, -60],
-    [7, -58],
-    [5, -52],
-    [3, -50],
-    [1, -50],
-    [0, -50],
-    [-2, -48],
-    [-5, -35],
-    [-8, -35],
-    [-10, -37],
-    [-12, -38],
-    [-15, -38],
-    [-20, -40],
-    [-23, -43],
-    [-28, -48],
-    [-30, -50],
-    [-32, -52],
-    [-35, -57],
-    [-38, -57],
-    [-40, -62],
-    [-42, -63],
-    [-44, -65],
-    [-46, -66],
-    [-48, -67],
-    [-50, -68],
-    [-52, -68],
-    [-53, -68],
-    [-55, -67],
-    [-54, -65],
-    [-52, -58],
-    [-50, -58],
-    [-48, -54],
-    [-46, -52],
-    [-42, -52],
-    [-38, -52],
-    [-32, -52],
-    [-28, -49],
-    [-22, -43],
-    [-18, -40],
-    [-12, -37],
-    [-8, -35],
-    [-5, -35],
-    [0, -48],
-    [5, -52],
-    [8, -60],
-    [10, -62],
-    [12, -70],
-    [12, -71],
-  ],
-  // Europe – main
-  [
-    [71, 28],
-    [70, 20],
-    [69, 18],
-    [67, 15],
-    [65, 14],
-    [62, 6],
-    [58, 5],
-    [56, 8],
-    [55, 10],
-    [57, 10],
-    [58, 12],
-    [57, 18],
-    [56, 22],
-    [54, 18],
-    [54, 14],
-    [52, 14],
-    [51, 10],
-    [51, 3],
-    [51, 2],
-    [51, -2],
-    [50, -4],
-    [48, -4],
-    [46, -2],
-    [44, -1],
-    [44, -8],
-    [38, -9],
-    [37, -8],
-    [36, -6],
-    [36, -5],
-    [36, 0],
-    [38, 4],
-    [40, 4],
-    [41, 2],
-    [42, 4],
-    [43, 5],
-    [43, 6],
-    [44, 8],
-    [43, 10],
-    [40, 16],
-    [38, 15],
-    [37, 15],
-    [38, 17],
-    [40, 18],
-    [41, 16],
-    [43, 17],
-    [42, 19],
-    [41, 20],
-    [42, 20],
-    [42, 22],
-    [43, 24],
-    [44, 28],
-    [44, 29],
-    [46, 30],
-    [47, 35],
-    [46, 37],
-    [47, 38],
-    [48, 38],
-    [48, 40],
-    [50, 39],
-    [52, 38],
-    [55, 38],
-    [58, 33],
-    [60, 30],
-    [60, 25],
-    [62, 24],
-    [63, 25],
-    [65, 28],
-    [68, 28],
-    [70, 28],
-    [71, 28],
-  ],
-  // Great Britain
-  [
-    [58, -6],
-    [60, -2],
-    [61, -1],
-    [58, -3],
-    [57, -2],
-    [57, -4],
-    [58, -5],
-    [57, -6],
-    [55, -6],
-    [54, -3],
-    [53, -4],
-    [52, -5],
-    [51, -5],
-    [51, -4],
-    [50, -5],
-    [50, -4],
-    [51, -2],
-    [52, 1],
-    [53, 0],
-    [54, -1],
-    [55, -2],
-    [55, -5],
-    [54, -6],
-    [53, -5],
-    [53, -3],
-    [54, -1],
-    [55, 0],
-    [56, -3],
-    [58, -4],
-    [58, -6],
-  ],
-  // Ireland
-  [
-    [55, -8],
-    [54, -6],
-    [52, -6],
-    [51, -10],
-    [53, -10],
-    [54, -10],
-    [55, -8],
-  ],
-  // Iceland
-  [
-    [66, -14],
-    [64, -14],
-    [63, -20],
-    [63, -24],
-    [64, -24],
-    [65, -22],
-    [66, -22],
-    [66, -18],
-    [66, -14],
-  ],
-  // Africa
-  [
-    [37, -5],
-    [37, 5],
-    [37, 10],
-    [33, 11],
-    [32, 20],
-    [32, 25],
-    [28, 34],
-    [24, 37],
-    [22, 37],
-    [12, 43],
-    [12, 44],
-    [11, 44],
-    [10, 45],
-    [5, 42],
-    [0, 42],
-    [-2, 40],
-    [-5, 40],
-    [-10, 40],
-    [-12, 40],
-    [-15, 36],
-    [-17, 38],
-    [-20, 35],
-    [-24, 35],
-    [-26, 33],
-    [-28, 33],
-    [-30, 31],
-    [-34, 28],
-    [-35, 22],
-    [-34, 18],
-    [-32, 18],
-    [-30, 17],
-    [-25, 15],
-    [-22, 13],
-    [-18, 12],
-    [-15, 12],
-    [-12, 14],
-    [-10, 14],
-    [-8, 10],
-    [-5, 9],
-    [0, 9],
-    [2, 8],
-    [4, 6],
-    [5, 2],
-    [5, -1],
-    [4, -1],
-    [5, -5],
-    [5, -8],
-    [5, -16],
-    [10, -15],
-    [12, -15],
-    [14, -17],
-    [15, -16],
-    [16, -16],
-    [18, -16],
-    [20, -17],
-    [22, -17],
-    [25, -15],
-    [28, -13],
-    [30, -9],
-    [32, -5],
-    [35, -5],
-    [37, -5],
-  ],
-  // Madagascar
-  [
-    [-12, 49],
-    [-14, 48],
-    [-18, 44],
-    [-22, 44],
-    [-25, 45],
-    [-25, 47],
-    [-22, 48],
-    [-18, 48],
-    [-14, 50],
-    [-12, 49],
-  ],
-  // Asia – main
-  [
-    [42, 45],
-    [42, 50],
-    [43, 52],
-    [44, 56],
-    [44, 60],
-    [40, 60],
-    [38, 62],
-    [36, 62],
-    [28, 62],
-    [24, 62],
-    [22, 60],
-    [20, 68],
-    [22, 72],
-    [20, 72],
-    [18, 74],
-    [14, 78],
-    [8, 78],
-    [6, 80],
-    [8, 80],
-    [10, 80],
-    [8, 81],
-    [10, 80],
-    [9, 78],
-    [10, 80],
-    [10, 90],
-    [12, 100],
-    [10, 104],
-    [1, 104],
-    [1, 110],
-    [2, 110],
-    [4, 108],
-    [6, 108],
-    [8, 110],
-    [10, 108],
-    [12, 110],
-    [16, 110],
-    [18, 110],
-    [20, 112],
-    [22, 114],
-    [24, 118],
-    [26, 119],
-    [28, 121],
-    [30, 122],
-    [32, 122],
-    [35, 120],
-    [38, 121],
-    [40, 122],
-    [42, 121],
-    [43, 130],
-    [48, 134],
-    [50, 140],
-    [52, 142],
-    [55, 135],
-    [52, 130],
-    [50, 120],
-    [52, 115],
-    [55, 110],
-    [55, 103],
-    [56, 95],
-    [55, 85],
-    [57, 76],
-    [56, 69],
-    [55, 64],
-    [54, 57],
-    [52, 52],
-    [50, 50],
-    [46, 48],
-    [44, 47],
-    [42, 45],
-  ],
-  // Arabian Peninsula
-  [
-    [30, 32],
-    [28, 34],
-    [22, 37],
-    [14, 43],
-    [12, 43],
-    [12, 45],
-    [14, 48],
-    [18, 52],
-    [22, 56],
-    [24, 58],
-    [26, 56],
-    [28, 56],
-    [30, 52],
-    [30, 48],
-    [32, 48],
-    [34, 36],
-    [32, 32],
-    [30, 32],
-  ],
-  // Japan – Honshu
-  [
-    [40, 140],
-    [38, 141],
-    [36, 138],
-    [34, 136],
-    [34, 134],
-    [35, 132],
-    [36, 136],
-    [37, 137],
-    [38, 140],
-    [40, 141],
-    [41, 141],
-    [42, 140],
-    [43, 141],
-    [44, 145],
-    [44, 143],
-    [42, 142],
-    [40, 140],
-  ],
-  // Japan – Kyushu
-  [
-    [34, 131],
-    [33, 130],
-    [32, 130],
-    [31, 131],
-    [32, 132],
-    [33, 131],
-    [34, 131],
-  ],
-  // Sumatra
-  [
-    [5, 95],
-    [4, 97],
-    [2, 100],
-    [0, 103],
-    [-2, 104],
-    [-4, 106],
-    [-5, 106],
-    [-4, 104],
-    [-2, 102],
-    [0, 99],
-    [2, 98],
-    [4, 96],
-    [5, 95],
-  ],
-  // Java
-  [
-    [-6, 106],
-    [-7, 108],
-    [-8, 110],
-    [-8, 112],
-    [-8, 114],
-    [-8, 115],
-    [-7, 113],
-    [-6, 111],
-    [-6, 108],
-    [-6, 106],
-  ],
-  // Borneo
-  [
-    [7, 116],
-    [6, 118],
-    [4, 118],
-    [2, 118],
-    [0, 118],
-    [-1, 116],
-    [-2, 116],
-    [-2, 114],
-    [-1, 112],
-    [1, 110],
-    [2, 110],
-    [4, 112],
-    [5, 115],
-    [6, 116],
-    [7, 116],
-  ],
-  // Philippines – Luzon
-  [
-    [18, 121],
-    [16, 120],
-    [14, 121],
-    [14, 122],
-    [16, 122],
-    [18, 122],
-    [18, 121],
-  ],
-  // Australia
-  [
-    [-14, 126],
-    [-16, 123],
-    [-18, 122],
-    [-20, 119],
-    [-22, 114],
-    [-24, 114],
-    [-28, 115],
-    [-30, 115],
-    [-32, 116],
-    [-34, 119],
-    [-34, 123],
-    [-35, 137],
-    [-38, 140],
-    [-38, 146],
-    [-36, 150],
-    [-34, 151],
-    [-30, 153],
-    [-26, 153],
-    [-22, 150],
-    [-18, 148],
-    [-16, 146],
-    [-14, 144],
-    [-12, 142],
-    [-12, 136],
-    [-14, 132],
-    [-12, 132],
-    [-12, 130],
-    [-14, 128],
-    [-14, 126],
-  ],
-  // Tasmania
-  [
-    [-40, 145],
-    [-42, 145],
-    [-43, 147],
-    [-43, 148],
-    [-42, 148],
-    [-40, 148],
-    [-40, 145],
-  ],
-  // New Zealand – North Island
-  [
-    [-34, 173],
-    [-36, 175],
-    [-38, 178],
-    [-41, 176],
-    [-40, 175],
-    [-38, 175],
-    [-36, 174],
-    [-34, 173],
-  ],
-  // New Zealand – South Island
-  [
-    [-40, 172],
-    [-42, 171],
-    [-44, 168],
-    [-46, 168],
-    [-46, 170],
-    [-44, 172],
-    [-42, 173],
-    [-40, 172],
-  ],
-];
-
-// ─── Dot-matrix land points ───────────────────────────────────────────────────
-const LAND_POINTS: THREE.Vector3[] = [];
-const STEP = 0.7; // degrees – higher density for more accurate continent outlines
-for (let lat = -90; lat <= 90; lat += STEP) {
-  for (let lng = -180; lng <= 180; lng += STEP) {
-    if (isLandPoint(lat, lng)) {
-      LAND_POINTS.push(latLngToVec3(lat, lng, 1.001));
+    // ── Land stroke (coastlines) ──────────────────────────────────────────────
+    ctx.beginPath();
+    for (const feature of geoJson.features) {
+      pathGen(feature as unknown as GeoPermissibleObjects);
     }
+    ctx.strokeStyle = "rgba(80, 160, 255, 0.9)";
+    ctx.lineWidth = 0.8 * dpr;
+    ctx.stroke();
   }
+
+  // ── Globe border ─────────────────────────────────────────────────────────────
+  ctx.beginPath();
+  pathGen(SPHERE);
+  ctx.strokeStyle = "rgba(60, 140, 255, 0.4)";
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.stroke();
+
+  // ── Datacenter markers ────────────────────────────────────────────────────────
+  const pulse = 0.5 + 0.5 * Math.sin(pulseT);
+  const ringExpand = (pulseT * 0.4) % 1;
+
+  for (const m of markers) {
+    // d3 projection takes [longitude, latitude]
+    const projected = projection([m.lng, m.lat]);
+    // projection() returns null when the point is behind the globe (clipAngle handles this)
+    if (projected === null) continue;
+
+    const [x, y] = projected;
+
+    // Expanding ring
+    const ringR = (6 + 14 * ringExpand) * dpr;
+    ctx.beginPath();
+    ctx.arc(x, y, ringR, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(0, 229, 255, ${0.45 * (1 - ringExpand)})`;
+    ctx.lineWidth = 1 * dpr;
+    ctx.stroke();
+
+    // Glow
+    const glowGrad = ctx.createRadialGradient(x, y, 0, x, y, 8 * dpr);
+    glowGrad.addColorStop(0, `rgba(0, 229, 255, ${0.4 + 0.2 * pulse})`);
+    glowGrad.addColorStop(1, "rgba(0, 229, 255, 0)");
+    ctx.beginPath();
+    ctx.arc(x, y, 8 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = glowGrad;
+    ctx.fill();
+
+    // Core dot
+    ctx.beginPath();
+    ctx.arc(x, y, 3 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.85 + 0.15 * pulse})`;
+    ctx.fill();
+  }
+
+  // ── Atmosphere glow ───────────────────────────────────────────────────────────
+  const atmGrad = ctx.createRadialGradient(
+    cx,
+    cy,
+    radius * 0.95,
+    cx,
+    cy,
+    radius * 1.12,
+  );
+  atmGrad.addColorStop(0, "rgba(0, 80, 255, 0.0)");
+  atmGrad.addColorStop(0.6, "rgba(0, 100, 255, 0.06)");
+  atmGrad.addColorStop(1, "rgba(0, 140, 255, 0.18)");
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 1.12, 0, Math.PI * 2);
+  ctx.fillStyle = atmGrad;
+  ctx.fill();
+
+  // ── Specular highlight ────────────────────────────────────────────────────────
+  const hlGrad = ctx.createRadialGradient(
+    cx - radius * 0.35,
+    cy - radius * 0.35,
+    0,
+    cx - radius * 0.1,
+    cy - radius * 0.15,
+    radius * 0.65,
+  );
+  hlGrad.addColorStop(0, "rgba(255,255,255,0.07)");
+  hlGrad.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = hlGrad;
+  ctx.fill();
 }
 
-// ─── Stars ────────────────────────────────────────────────────────────────────
-const STARS = Array.from({ length: 120 }, (_, i) => ({
-  id: `star-${i}`,
-  w: (i * 37 + 13) % 5 === 0 ? "2px" : "1px",
+// ─── Stars ─────────────────────────────────────────────────────────────────────
+const STARS = Array.from({ length: 150 }, (_, i) => ({
+  id: i,
   top: `${((i * 137.508 + 0.5) % 1) * 100}%`,
   left: `${((i * 97.618 + 0.5) % 1) * 100}%`,
-  opacity: 0.12 + ((i * 53 + 7) % 10) * 0.04,
+  size: (i * 37 + 13) % 7 === 0 ? 2 : 1,
+  opacity: 0.08 + ((i * 53 + 7) % 10) * 0.035,
 }));
 
-// ─── Pitch clamp constant ─────────────────────────────────────────────────────
-const MAX_PITCH = 65 * (Math.PI / 180);
-
-// ─── Components ───────────────────────────────────────────────────────────────
-
-interface GlobeMarker {
-  position: THREE.Vector3;
-  label: string;
-}
-
-function LandDots() {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-  const count = LAND_POINTS.length;
-
-  useEffect(() => {
-    if (!meshRef.current) return;
-    for (let i = 0; i < count; i++) {
-      dummy.position.copy(LAND_POINTS[i]);
-      // orient dot to face outward (along position normal)
-      dummy.lookAt(dummy.position.clone().multiplyScalar(2));
-      dummy.updateMatrix();
-      meshRef.current.setMatrixAt(i, dummy.matrix);
-    }
-    meshRef.current.instanceMatrix.needsUpdate = true;
-  }, [count, dummy]);
-
-  return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, undefined, count]}
-      frustumCulled={false}
-    >
-      <sphereGeometry args={[0.0028, 4, 4]} />
-      <meshBasicMaterial color="#3a86ff" transparent opacity={0.88} />
-    </instancedMesh>
-  );
-}
-
-function PulsingMarker({
-  position,
-  idx,
-}: { position: THREE.Vector3; idx: number }) {
-  const glowRef = useRef<THREE.Mesh>(null);
-  const ringRef = useRef<THREE.Mesh>(null);
-  const t = useRef(idx * 0.7);
-
-  useFrame((_, delta) => {
-    t.current += delta * 1.8;
-    const s = 1 + 0.5 * Math.sin(t.current);
-    if (glowRef.current) {
-      glowRef.current.scale.setScalar(s);
-      (glowRef.current.material as THREE.MeshBasicMaterial).opacity =
-        0.1 + 0.12 * Math.abs(Math.sin(t.current));
-    }
-    if (ringRef.current) {
-      ringRef.current.scale.setScalar(1 + 0.8 * ((t.current * 0.5) % 1));
-      (ringRef.current.material as THREE.MeshBasicMaterial).opacity = Math.max(
-        0,
-        0.4 - 0.4 * ((t.current * 0.5) % 1),
-      );
-    }
-  });
-
-  // Outward normal for orientation
-  const up = position.clone().normalize();
-  const q = new THREE.Quaternion().setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    up,
-  );
-
-  return (
-    <group position={position} quaternion={q}>
-      {/* Core bright dot */}
-      <mesh>
-        <sphereGeometry args={[0.016, 8, 8]} />
-        <meshBasicMaterial color="#ffffff" />
-      </mesh>
-      {/* Cyan glow sphere */}
-      <mesh ref={glowRef}>
-        <sphereGeometry args={[0.032, 8, 8]} />
-        <meshBasicMaterial
-          color="#00e5ff"
-          transparent
-          opacity={0.18}
-          depthWrite={false}
-        />
-      </mesh>
-      {/* Expanding ring */}
-      <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.024, 0.034, 16]} />
-        <meshBasicMaterial
-          color="#00e5ff"
-          transparent
-          opacity={0.35}
-          depthWrite={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-    </group>
-  );
-}
-
-function GridLines() {
-  const lines = useMemo(() => {
-    const entries: Array<{ id: string; geo: THREE.BufferGeometry }> = [];
-    const R = 1.002;
-    for (let lat = -80; lat <= 80; lat += 20) {
-      const pts: THREE.Vector3[] = [];
-      for (let lng = -180; lng <= 181; lng += 4)
-        pts.push(latLngToVec3(lat, lng, R));
-      entries.push({
-        id: `lat${lat}`,
-        geo: new THREE.BufferGeometry().setFromPoints(pts),
-      });
-    }
-    for (let lng = -180; lng < 180; lng += 30) {
-      const pts: THREE.Vector3[] = [];
-      for (let lat2 = -90; lat2 <= 90; lat2 += 3)
-        pts.push(latLngToVec3(lat2, lng, R));
-      entries.push({
-        id: `lng${lng}`,
-        geo: new THREE.BufferGeometry().setFromPoints(pts),
-      });
-    }
-    return entries;
-  }, []);
-
-  return (
-    <>
-      {lines.map(({ id, geo: g }) => (
-        <line key={id}>
-          <primitive object={g} attach="geometry" />
-          <lineBasicMaterial
-            color="#1a3a6a"
-            transparent
-            opacity={0.25}
-            depthWrite={false}
-          />
-        </line>
-      ))}
-    </>
-  );
-}
-
-interface GlobeSceneProps {
-  markers: GlobeMarker[];
-  rotRef: React.MutableRefObject<{ x: number; y: number }>;
-  isDragging: React.MutableRefObject<boolean>;
-}
-
-function GlobeScene({ markers, rotRef, isDragging }: GlobeSceneProps) {
-  const groupRef = useRef<THREE.Group>(null);
-
-  useFrame((_, delta) => {
-    if (!groupRef.current) return;
-    if (!isDragging.current) {
-      rotRef.current.y += delta * 0.1;
-    }
-    groupRef.current.rotation.y = rotRef.current.y;
-    groupRef.current.rotation.x = rotRef.current.x;
-  });
-
-  return (
-    <group ref={groupRef}>
-      {/* Ocean base sphere */}
-      <mesh>
-        <sphereGeometry args={[1, 64, 64]} />
-        <meshPhongMaterial color="#040f22" shininess={6} specular="#1a4080" />
-      </mesh>
-
-      {/* Grid lines */}
-      <GridLines />
-
-      {/* Land dots */}
-      <LandDots />
-
-      {/* Atmosphere outer glow */}
-      <mesh>
-        <sphereGeometry args={[1.12, 32, 32]} />
-        <meshBasicMaterial
-          color="#0066ff"
-          transparent
-          opacity={0.025}
-          side={THREE.BackSide}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh>
-        <sphereGeometry args={[1.07, 32, 32]} />
-        <meshBasicMaterial
-          color="#1a8fff"
-          transparent
-          opacity={0.04}
-          side={THREE.BackSide}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh>
-        <sphereGeometry args={[1.035, 32, 32]} />
-        <meshBasicMaterial
-          color="#60c4ff"
-          transparent
-          opacity={0.055}
-          side={THREE.BackSide}
-          depthWrite={false}
-        />
-      </mesh>
-
-      {/* Datacenter markers */}
-      {markers.map((m, i) => (
-        <PulsingMarker key={m.label} position={m.position} idx={i} />
-      ))}
-    </group>
-  );
-}
+// Maximum pitch angle in degrees (prevents pole-flipping)
+const MAX_PITCH_DEG = 65;
+const TOPO_URL =
+  "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
 // ─── Data fetching ─────────────────────────────────────────────────────────────
-async function fetchNodeLocations(): Promise<{
-  markers: GlobeMarker[];
+async function fetchData(): Promise<{
+  geoJson: GeoJson | null;
+  markers: Marker[];
   officialDcCount: number | null;
 }> {
+  let geoJson: GeoJson | null = null;
+  try {
+    const res = await fetch(TOPO_URL);
+    if (res.ok) {
+      const topo = await res.json();
+      geoJson = topoToGeo(topo, "land");
+    }
+  } catch {
+    /* use null */
+  }
+
   let officialDcCount: number | null = null;
   const seen = new Set<string>();
   const usedCoords = new Map<string, number>();
-  const markers: GlobeMarker[] = [];
+  const markers: Marker[] = [];
 
   const addMarker = (label: string, coord: [number, number]) => {
     if (seen.has(label)) return;
@@ -1164,12 +466,12 @@ async function fetchNodeLocations(): Promise<{
     usedCoords.set(key, offset + 1);
     const jitter = offset * 0.018;
     markers.push({
-      position: latLngToVec3(coord[0] + jitter, coord[1] + jitter * 1.3, 1.018),
+      lat: coord[0] + jitter,
+      lng: coord[1] + jitter * 1.3,
       label,
     });
   };
 
-  // Try API
   try {
     const [nodesRes, dcRes] = await Promise.allSettled([
       fetch("https://ic-api.internetcomputer.org/api/v3/nodes", {
@@ -1194,12 +496,9 @@ async function fetchNodeLocations(): Promise<{
         : Array.isArray(json?.data_centers)
           ? json.data_centers
           : [];
-
       if (dcs.length > 0) officialDcCount = dcs.length;
-
       for (const dc of dcs) {
         const id = (dc.id ?? dc.dc_id ?? dc.name ?? "").toLowerCase();
-        // Use embedded lat/lng if available
         const lat = dc.location?.lat;
         const lng = dc.location?.long ?? dc.location?.longitude;
         if (lat !== undefined && lng !== undefined && id) {
@@ -1235,79 +534,123 @@ async function fetchNodeLocations(): Promise<{
       }
     }
   } catch {
-    /* fall through to hardcoded */
+    /* fall through */
   }
 
-  // Always supplement with hardcoded locations
   for (const [key, coord] of Object.entries(KNOWN_LOCATIONS)) {
     addMarker(key, coord);
   }
 
-  // Ensure at least hardcoded if nothing came through
-  if (markers.length === 0) {
-    for (const [key, coord] of Object.entries(KNOWN_LOCATIONS)) {
-      addMarker(key, coord);
-    }
-  }
-
-  return { markers, officialDcCount };
+  return { geoJson, markers, officialDcCount };
 }
 
-function GlobeSkeletonFallback() {
-  return (
-    <div
-      className="w-full flex items-center justify-center"
-      style={{ height: "clamp(300px, 48vw, 520px)" }}
-    >
-      <div
-        className="rounded-full animate-pulse"
-        style={{
-          width: "clamp(260px, 40vw, 440px)",
-          height: "clamp(260px, 40vw, 440px)",
-          background:
-            "radial-gradient(circle at 35% 35%, oklch(0.22 0.08 240), oklch(0.06 0.04 240))",
-        }}
-      />
-    </div>
-  );
-}
-
-// ─── Export ────────────────────────────────────────────────────────────────────
+// ─── Main Component ─────────────────────────────────────────────────────────────
 export function ICPGlobe() {
-  const [markers, setMarkers] = useState<GlobeMarker[]>([]);
-  const [officialDcCount, setOfficialDcCount] = useState<number | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [grabbing, setGrabbing] = useState(false);
+  const [officialDcCount, setOfficialDcCount] = useState<number | null>(null);
+  const [markerCount, setMarkerCount] = useState(0);
 
-  // Rotation state shared with GlobeScene via refs
-  const rotRef = useRef({ x: 0, y: 0 });
+  // Rotation stored in degrees for d3-geo (lambda = lon, phi = lat)
+  const rotRef = useRef({ lon: 0, lat: 0 });
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
+  const pulseT = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const lastTime = useRef<number | null>(null);
+  const geoJsonRef = useRef<GeoJson | null>(null);
+  const markersRef = useRef<Marker[]>([]);
+
+  // Suppress unused type - needed for documentation
+  const _unusedSphereType: SphereObject = { type: "Sphere" };
+  void _unusedSphereType;
 
   useEffect(() => {
-    fetchNodeLocations().then(({ markers: m, officialDcCount: c }) => {
-      setMarkers(m);
-      setOfficialDcCount(c);
+    fetchData().then(({ geoJson, markers, officialDcCount: cnt }) => {
+      geoJsonRef.current = geoJson;
+      markersRef.current = markers;
+      setOfficialDcCount(cnt);
+      setMarkerCount(markers.length);
       setLoaded(true);
     });
   }, []);
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+  const render = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    drawGlobe(
+      ctx,
+      canvas.width,
+      canvas.height,
+      geoJsonRef.current,
+      markersRef.current,
+      rotRef.current.lon,
+      rotRef.current.lat,
+      pulseT.current,
+      dpr,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const loop = (ts: number) => {
+      const dt =
+        lastTime.current !== null ? (ts - lastTime.current) / 1000 : 0.016;
+      lastTime.current = ts;
+      // Auto-rotate longitude when not dragging (~0.1 rad/s = 5.73 deg/s)
+      if (!isDragging.current) {
+        rotRef.current.lon -= dt * 5.73;
+      }
+      pulseT.current += dt * 1.8;
+      render();
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [loaded, render]);
+
+  useEffect(() => {
+    const onResize = () => {
+      const canvas = canvasRef.current;
+      const container = canvas?.parentElement;
+      if (!canvas || !container) return;
+      const dpr = window.devicePixelRatio || 1;
+      const w = container.clientWidth;
+      const h = Math.min(w, 520);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      render();
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [render]);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
     isDragging.current = true;
     lastPos.current = { x: e.clientX, y: e.clientY };
-    e.currentTarget.setPointerCapture(e.pointerId);
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setGrabbing(true);
   };
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging.current) return;
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
     lastPos.current = { x: e.clientX, y: e.clientY };
-    rotRef.current.y += dx * 0.005;
-    rotRef.current.x = Math.max(
-      -MAX_PITCH,
-      Math.min(MAX_PITCH, rotRef.current.x + dy * 0.005),
+    // ~0.3 degrees per pixel of drag
+    rotRef.current.lon -= dx * 0.3;
+    rotRef.current.lat = Math.max(
+      -MAX_PITCH_DEG,
+      Math.min(MAX_PITCH_DEG, rotRef.current.lat + dy * 0.3),
     );
   };
 
@@ -1319,7 +662,7 @@ export function ICPGlobe() {
   return (
     <div
       className="relative w-full overflow-hidden rounded-2xl"
-      style={{ background: "#030c1a" }}
+      style={{ background: "#020810" }}
     >
       {/* Stars */}
       <div className="absolute inset-0 pointer-events-none">
@@ -1328,8 +671,8 @@ export function ICPGlobe() {
             key={s.id}
             className="absolute rounded-full bg-white"
             style={{
-              width: s.w,
-              height: s.w,
+              width: s.size,
+              height: s.size,
               top: s.top,
               left: s.left,
               opacity: s.opacity,
@@ -1338,56 +681,38 @@ export function ICPGlobe() {
         ))}
       </div>
 
-      {/* Vignette */}
+      {/* Canvas */}
       <div
-        className="absolute inset-0 pointer-events-none z-10"
-        style={{
-          background:
-            "radial-gradient(ellipse 85% 65% at 50% 50%, transparent 35%, #030c1a 100%)",
-        }}
-      />
-
-      <div
-        style={{
-          height: "clamp(300px, 48vw, 520px)",
-          cursor: grabbing ? "grabbing" : "grab",
-          touchAction: "none",
-        }}
+        style={{ cursor: grabbing ? "grabbing" : "grab", touchAction: "none" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
       >
-        {!loaded ? (
-          <GlobeSkeletonFallback />
-        ) : (
-          <Canvas
-            frameloop="always"
-            camera={{ position: [0, 0, 2.5], fov: 44 }}
-            gl={{ antialias: true, alpha: true }}
-            style={{ background: "transparent" }}
+        {!loaded && (
+          <div
+            className="flex items-center justify-center"
+            style={{ height: "clamp(300px, 48vw, 520px)" }}
           >
-            <ambientLight intensity={0.3} />
-            <directionalLight
-              position={[4, 5, 3]}
-              intensity={1.0}
-              color="#c0d8ff"
+            <div
+              className="rounded-full animate-pulse"
+              style={{
+                width: "clamp(260px, 40vw, 440px)",
+                height: "clamp(260px, 40vw, 440px)",
+                background:
+                  "radial-gradient(circle at 35% 35%, oklch(0.22 0.08 240), oklch(0.06 0.04 240))",
+              }}
             />
-            <directionalLight
-              position={[-4, -2, -2]}
-              intensity={0.15}
-              color="#3355aa"
-            />
-            <pointLight position={[0, 0, 3]} intensity={0.2} color="#4488ff" />
-            <Suspense fallback={null}>
-              <GlobeScene
-                markers={markers}
-                rotRef={rotRef}
-                isDragging={isDragging}
-              />
-            </Suspense>
-          </Canvas>
+          </div>
         )}
+        <canvas
+          ref={canvasRef}
+          style={{
+            display: loaded ? "block" : "none",
+            width: "100%",
+            height: "clamp(300px, 48vw, 520px)",
+          }}
+        />
       </div>
 
       {/* Label */}
@@ -1408,9 +733,9 @@ export function ICPGlobe() {
             style={{ background: "#00e5ff", animationDelay: "0.5s" }}
           />
         </div>
-        {loaded && markers.length > 0 && (
+        {loaded && (
           <span className="text-xs" style={{ color: "rgba(80,150,200,0.6)" }}>
-            {officialDcCount !== null ? officialDcCount : markers.length}{" "}
+            {officialDcCount !== null ? officialDcCount : markerCount}{" "}
             datacenters tracked
           </span>
         )}
