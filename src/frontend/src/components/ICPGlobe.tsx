@@ -1,9 +1,3 @@
-import {
-  type GeoPermissibleObjects,
-  geoGraticule,
-  geoOrthographic,
-  geoPath,
-} from "d3-geo";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -24,9 +18,6 @@ interface Marker {
   lng: number;
   label: string;
 }
-
-// d3-geo accepts a "Sphere" object (not in standard GeoJSON spec)
-type SphereObject = { type: "Sphere" };
 
 // ─── Known ICP datacenter locations ───────────────────────────────────────────
 const KNOWN_LOCATIONS: Record<string, [number, number]> = {
@@ -269,16 +260,110 @@ function topoToGeo(topo: Record<string, unknown>, objectName: string): GeoJson {
   }
 }
 
-// Sphere object constant - d3-geo treats { type: "Sphere" } as the full globe outline
-const SPHERE = { type: "Sphere" } as unknown as GeoPermissibleObjects;
+// ─── Pulse state for sequential blinking (max 3, never simultaneous) ──────────
+const MAX_BLINK_SLOTS = 3;
+const CYCLE_DURATION = 4.0;
+const BLINK_DURATION = 0.9;
+const SLOT_OFFSET = CYCLE_DURATION / MAX_BLINK_SLOTS;
 
-// ─── Globe canvas renderer using d3-geo ───────────────────────────────────────
+// ─── Orthographic projection helpers ────────────────────────────────────────
+
+// Project a [lon, lat] coordinate under current rotation to canvas [x, y].
+// Returns null if the point is on the back hemisphere (dot <= 0).
+function project(
+  lon: number,
+  lat: number,
+  rotLon: number,
+  rotLat: number,
+  cx: number,
+  cy: number,
+  radius: number,
+): [number, number] | null {
+  // Apply globe rotation: shift lon/lat by the rotation
+  const adjLon = ((lon - rotLon + 540) % 360) - 180;
+  const adjLat = lat + rotLat;
+
+  const latR = (adjLat * Math.PI) / 180;
+  const lonR = (adjLon * Math.PI) / 180;
+
+  // Clamp lat to avoid poles overflow
+  const clampedLat = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, latR));
+
+  // Orthographic: project onto the unit sphere viewed from +Z
+  const x = Math.cos(clampedLat) * Math.sin(lonR);
+  const y = -Math.sin(clampedLat);
+  const z = Math.cos(clampedLat) * Math.cos(lonR);
+
+  // Back-face culling: only draw if z > 0 (visible hemisphere)
+  if (z <= 0) return null;
+
+  return [cx + x * radius, cy + y * radius];
+}
+
+// Returns the raw dot product for a lat/lng against the viewer.
+// Positive = facing viewer, negative = behind globe.
+// Used for smooth edge-fade calculation.
+function getPointDot(
+  lat: number,
+  lng: number,
+  rotLon: number,
+  rotLat: number,
+): number {
+  const latR = (lat * Math.PI) / 180;
+  const lngR = (lng * Math.PI) / 180;
+  const rotLonR = (rotLon * Math.PI) / 180;
+  const rotLatR = (rotLat * Math.PI) / 180;
+
+  const mx = Math.cos(latR) * Math.cos(lngR);
+  const my = Math.cos(latR) * Math.sin(lngR);
+  const mz = Math.sin(latR);
+
+  const viewLat = -rotLatR;
+  const viewLng = -rotLonR;
+  const vcx = Math.cos(viewLat) * Math.cos(viewLng);
+  const vcy = Math.cos(viewLat) * Math.sin(viewLng);
+  const vcz = Math.sin(viewLat);
+
+  return mx * vcx + my * vcy + mz * vcz;
+}
+
+// Draw a polygon ring with visibility culling per segment.
+// Skips segments where both endpoints are on the back hemisphere.
+// Uses canvas clip to prevent drawing outside the globe disc.
+function drawRing(
+  ctx: CanvasRenderingContext2D,
+  ring: number[][],
+  rotLon: number,
+  rotLat: number,
+  cx: number,
+  cy: number,
+  radius: number,
+) {
+  let started = false;
+  for (let i = 0; i < ring.length; i++) {
+    const [lon, lat] = ring[i];
+    const pt = project(lon, lat, rotLon, rotLat, cx, cy, radius);
+    if (pt === null) {
+      started = false;
+      continue;
+    }
+    if (!started) {
+      ctx.moveTo(pt[0], pt[1]);
+      started = true;
+    } else {
+      ctx.lineTo(pt[0], pt[1]);
+    }
+  }
+}
+
+// ─── Globe canvas renderer ─────────────────────────────────────────────────────
 function drawGlobe(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
   geoJson: GeoJson | null,
   markers: Marker[],
+  activeMarkerIndices: number[],
   rotLon: number,
   rotLat: number,
   pulseT: number,
@@ -289,17 +374,6 @@ function drawGlobe(
   const cx = width / 2;
   const cy = height / 2;
   const radius = Math.min(width, height) * 0.42;
-
-  // d3-geo orthographic projection with native antimeridian handling and
-  // automatic horizon clipping via clipAngle(90).
-  const projection = geoOrthographic()
-    .scale(radius)
-    .translate([cx, cy])
-    .rotate([rotLon, rotLat, 0]) // degrees: [lambda, phi, gamma]
-    .clipAngle(90); // clips everything beyond the visible hemisphere
-
-  const pathGen = geoPath(projection, ctx);
-  const graticule = geoGraticule().step([30, 20]);
 
   // ── Ocean fill ───────────────────────────────────────────────────────────────
   const oceanGrad = ctx.createRadialGradient(
@@ -315,76 +389,177 @@ function drawGlobe(
   oceanGrad.addColorStop(1, "#020810");
 
   ctx.beginPath();
-  pathGen(SPHERE);
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fillStyle = oceanGrad;
   ctx.fill();
 
-  // ── Graticule (grid lines) ────────────────────────────────────────────────────
+  // ── Clip all continent/graticule drawing to the globe disc ─────────────────
+  ctx.save();
   ctx.beginPath();
-  pathGen(graticule());
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.clip();
+
+  // ── Graticule (grid lines) ────────────────────────────────────────────────────
   ctx.strokeStyle = "rgba(30, 80, 160, 0.25)";
   ctx.lineWidth = 0.5 * dpr;
-  ctx.stroke();
 
-  // ── Land fill ────────────────────────────────────────────────────────────────
-  if (geoJson) {
+  // Longitude lines every 30°
+  for (let lon = -180; lon <= 180; lon += 30) {
     ctx.beginPath();
-    for (const feature of geoJson.features) {
-      pathGen(feature as unknown as GeoPermissibleObjects);
+    for (let lat = -90; lat <= 90; lat += 3) {
+      const pt = project(lon, lat, rotLon, rotLat, cx, cy, radius);
+      if (pt === null) continue;
+      if (lat === -90) ctx.moveTo(pt[0], pt[1]);
+      else ctx.lineTo(pt[0], pt[1]);
     }
-    ctx.fillStyle = "rgba(28, 85, 180, 0.55)";
-    ctx.fill();
-
-    // ── Land stroke (coastlines) ──────────────────────────────────────────────
-    ctx.beginPath();
-    for (const feature of geoJson.features) {
-      pathGen(feature as unknown as GeoPermissibleObjects);
-    }
-    ctx.strokeStyle = "rgba(80, 160, 255, 0.9)";
-    ctx.lineWidth = 0.8 * dpr;
     ctx.stroke();
   }
 
+  // Latitude lines every 20°
+  for (let lat = -80; lat <= 80; lat += 20) {
+    ctx.beginPath();
+    let started = false;
+    for (let lon = -180; lon <= 180; lon += 3) {
+      const pt = project(lon, lat, rotLon, rotLat, cx, cy, radius);
+      if (pt === null) {
+        started = false;
+        continue;
+      }
+      if (!started) {
+        ctx.moveTo(pt[0], pt[1]);
+        started = true;
+      } else {
+        ctx.lineTo(pt[0], pt[1]);
+      }
+    }
+    ctx.stroke();
+  }
+
+  // ── Land fill ────────────────────────────────────────────────────────────────
+  if (geoJson) {
+    // Fill pass
+    ctx.fillStyle = "rgba(28, 85, 180, 0.55)";
+    for (const feature of geoJson.features) {
+      const { geometry } = feature;
+      if (geometry.type === "Polygon") {
+        const rings = geometry.coordinates as number[][][];
+        ctx.beginPath();
+        for (const ring of rings) {
+          drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
+        }
+        ctx.fill();
+      } else if (geometry.type === "MultiPolygon") {
+        const polys = geometry.coordinates as number[][][][];
+        for (const poly of polys) {
+          ctx.beginPath();
+          for (const ring of poly) {
+            drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
+          }
+          ctx.fill();
+        }
+      }
+    }
+
+    // Stroke pass
+    ctx.strokeStyle = "rgba(80, 160, 255, 0.9)";
+    ctx.lineWidth = 0.8 * dpr;
+    for (const feature of geoJson.features) {
+      const { geometry } = feature;
+      if (geometry.type === "Polygon") {
+        const rings = geometry.coordinates as number[][][];
+        ctx.beginPath();
+        for (const ring of rings) {
+          drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
+        }
+        ctx.stroke();
+      } else if (geometry.type === "MultiPolygon") {
+        const polys = geometry.coordinates as number[][][][];
+        for (const poly of polys) {
+          ctx.beginPath();
+          for (const ring of poly) {
+            drawRing(ctx, ring, rotLon, rotLat, cx, cy, radius);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  // Restore clip
+  ctx.restore();
+
   // ── Globe border ─────────────────────────────────────────────────────────────
   ctx.beginPath();
-  pathGen(SPHERE);
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.strokeStyle = "rgba(60, 140, 255, 0.4)";
   ctx.lineWidth = 1.5 * dpr;
   ctx.stroke();
 
   // ── Datacenter markers ────────────────────────────────────────────────────────
-  const pulse = 0.5 + 0.5 * Math.sin(pulseT);
-  const ringExpand = (pulseT * 0.4) % 1;
+  // Build blink intensities for active slots
+  const blinkIntensity = new Map<number, number>();
+  for (let slot = 0; slot < MAX_BLINK_SLOTS; slot++) {
+    const phase =
+      (((pulseT + slot * SLOT_OFFSET) % CYCLE_DURATION) + CYCLE_DURATION) %
+      CYCLE_DURATION;
+    if (phase < BLINK_DURATION) {
+      if (activeMarkerIndices.length > 0) {
+        const markerIdx =
+          activeMarkerIndices[
+            (slot * Math.ceil(activeMarkerIndices.length / MAX_BLINK_SLOTS)) %
+              activeMarkerIndices.length
+          ];
+        const t = phase / BLINK_DURATION;
+        const intensity = Math.sin(t * Math.PI);
+        blinkIntensity.set(markerIdx, intensity);
+      }
+    }
+  }
 
-  for (const m of markers) {
-    // d3 projection takes [longitude, latitude]
-    const projected = projection([m.lng, m.lat]);
-    // projection() returns null when the point is behind the globe (clipAngle handles this)
-    if (projected === null) continue;
+  for (let i = 0; i < markers.length; i++) {
+    const m = markers[i];
 
-    const [x, y] = projected;
+    // ── Dot product: positive = facing viewer, negative = behind globe ────────
+    const dot = getPointDot(m.lat, m.lng, rotLon, rotLat);
+    if (dot <= 0) continue;
 
-    // Expanding ring
-    const ringR = (6 + 14 * ringExpand) * dpr;
-    ctx.beginPath();
-    ctx.arc(x, y, ringR, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(0, 229, 255, ${0.45 * (1 - ringExpand)})`;
-    ctx.lineWidth = 1 * dpr;
-    ctx.stroke();
+    // ── Edge fade: smoothstep from 0 (horizon) to 1 (dot >= 0.25) ────────────
+    const edgeFade = Math.min(1, dot / 0.25);
+    const smoothEdgeFade = edgeFade * edgeFade * (3 - 2 * edgeFade);
 
-    // Glow
-    const glowGrad = ctx.createRadialGradient(x, y, 0, x, y, 8 * dpr);
-    glowGrad.addColorStop(0, `rgba(0, 229, 255, ${0.4 + 0.2 * pulse})`);
-    glowGrad.addColorStop(1, "rgba(0, 229, 255, 0)");
-    ctx.beginPath();
-    ctx.arc(x, y, 8 * dpr, 0, Math.PI * 2);
-    ctx.fillStyle = glowGrad;
-    ctx.fill();
+    const pt = project(m.lng, m.lat, rotLon, rotLat, cx, cy, radius);
+    if (pt === null) continue;
+    const [x, y] = pt;
 
-    // Core dot
+    const intensity = blinkIntensity.get(i) ?? 0;
+
+    if (intensity > 0) {
+      // Expanding ring — only when blinking
+      const ringExpand = intensity * 0.85;
+      const ringR = (6 + 14 * ringExpand) * dpr;
+      ctx.beginPath();
+      ctx.arc(x, y, ringR, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0, 229, 255, ${0.55 * intensity * smoothEdgeFade})`;
+      ctx.lineWidth = 1 * dpr;
+      ctx.stroke();
+
+      // Glow
+      const glowGrad = ctx.createRadialGradient(x, y, 0, x, y, 8 * dpr);
+      glowGrad.addColorStop(
+        0,
+        `rgba(0, 229, 255, ${0.5 * intensity * smoothEdgeFade})`,
+      );
+      glowGrad.addColorStop(1, "rgba(0, 229, 255, 0)");
+      ctx.beginPath();
+      ctx.arc(x, y, 8 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = glowGrad;
+      ctx.fill();
+    }
+
+    // Core dot — fades at the edges for a smooth horizon transition
     ctx.beginPath();
     ctx.arc(x, y, 3 * dpr, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 255, 255, ${0.85 + 0.15 * pulse})`;
+    ctx.fillStyle = `rgba(255, 255, 255, ${(0.55 + 0.4 * intensity) * smoothEdgeFade})`;
     ctx.fill();
   }
 
@@ -544,6 +719,15 @@ async function fetchData(): Promise<{
   return { geoJson, markers, officialDcCount };
 }
 
+// ─── Build a stable list of blink-candidate indices (spread across the globe) ──
+function buildActiveMarkerIndices(markers: Marker[]): number[] {
+  if (markers.length === 0) return [];
+  const count = Math.min(MAX_BLINK_SLOTS, markers.length);
+  return Array.from({ length: count }, (_, i) =>
+    Math.floor((i * markers.length) / count),
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────────
 export function ICPGlobe() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -552,7 +736,6 @@ export function ICPGlobe() {
   const [officialDcCount, setOfficialDcCount] = useState<number | null>(null);
   const [markerCount, setMarkerCount] = useState(0);
 
-  // Rotation stored in degrees for d3-geo (lambda = lon, phi = lat)
   const rotRef = useRef({ lon: 0, lat: 0 });
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -561,15 +744,13 @@ export function ICPGlobe() {
   const lastTime = useRef<number | null>(null);
   const geoJsonRef = useRef<GeoJson | null>(null);
   const markersRef = useRef<Marker[]>([]);
-
-  // Suppress unused type - needed for documentation
-  const _unusedSphereType: SphereObject = { type: "Sphere" };
-  void _unusedSphereType;
+  const activeMarkerIndicesRef = useRef<number[]>([]);
 
   useEffect(() => {
     fetchData().then(({ geoJson, markers, officialDcCount: cnt }) => {
       geoJsonRef.current = geoJson;
       markersRef.current = markers;
+      activeMarkerIndicesRef.current = buildActiveMarkerIndices(markers);
       setOfficialDcCount(cnt);
       setMarkerCount(markers.length);
       setLoaded(true);
@@ -588,6 +769,7 @@ export function ICPGlobe() {
       canvas.height,
       geoJsonRef.current,
       markersRef.current,
+      activeMarkerIndicesRef.current,
       rotRef.current.lon,
       rotRef.current.lat,
       pulseT.current,
@@ -601,11 +783,10 @@ export function ICPGlobe() {
       const dt =
         lastTime.current !== null ? (ts - lastTime.current) / 1000 : 0.016;
       lastTime.current = ts;
-      // Auto-rotate longitude when not dragging (~0.1 rad/s = 5.73 deg/s)
       if (!isDragging.current) {
         rotRef.current.lon -= dt * 5.73;
       }
-      pulseT.current += dt * 1.8;
+      pulseT.current += dt * 1.0;
       render();
       rafRef.current = requestAnimationFrame(loop);
     };
@@ -646,7 +827,6 @@ export function ICPGlobe() {
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
     lastPos.current = { x: e.clientX, y: e.clientY };
-    // ~0.3 degrees per pixel of drag
     rotRef.current.lon -= dx * 0.3;
     rotRef.current.lat = Math.max(
       -MAX_PITCH_DEG,
