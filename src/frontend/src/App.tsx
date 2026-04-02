@@ -34,10 +34,8 @@ import type { NNSProposal, SortOption, StatusFilter } from "./types/nns";
 const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "ALL", label: "All" },
   { value: "PROPOSAL_STATUS_OPEN", label: "Open" },
-  { value: "PROPOSAL_STATUS_ACCEPTED", label: "Adopted" },
   { value: "PROPOSAL_STATUS_REJECTED", label: "Rejected" },
   { value: "PROPOSAL_STATUS_EXECUTED", label: "Executed" },
-  { value: "PROPOSAL_STATUS_FAILED", label: "Failed" },
 ];
 
 function HeroSection({
